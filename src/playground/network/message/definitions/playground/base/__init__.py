@@ -1,0 +1,9 @@
+from RegisterClient        import CURRENT_VERSION as RegisterClient
+from UnregisterClient      import CURRENT_VERSION as UnregisterClient
+from ClientRegistered      import CURRENT_VERSION as ClientRegistered 
+from ClientUnregistered    import CURRENT_VERSION as ClientUnregistered
+from ClientToClientMessage import CURRENT_VERSION as ClientToClientMessage
+from RunMobileCode         import CURRENT_VERSION as RunMobileCode
+from MobileCodeResult      import CURRENT_VERSION as MobileCodeResult
+from GetPeers              import CURRENT_VERSION as GetPeers
+from Peers                 import CURRENT_VERSION as Peers 
