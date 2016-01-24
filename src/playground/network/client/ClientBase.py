@@ -433,7 +433,7 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
                 authAddr = ".".join(addrParts)
                 if self.__mibAuthInfo.has_key(authAddr):
                     connType, privKey = self.__mibAuthInfo[authAddr]
-                    prot = self.connect(SimpleMIBClientFactory(), addr, port, connType)
+                    srcPort, prot = self.connect(SimpleMIBClientFactory(), addr, port, connType)
                     prot = prot.getApplicationLayer()
                     prot.setMIBServerAuthData(privKey)
                     self.__mibProtocols[str(addr)] = [prot, time.time()]

@@ -2,6 +2,10 @@
 Created on Feb 15, 2014
 
 @author: sethjn
+
+This sample shows how to do some basic things with playground.
+It does not use the PlaygroundNode interface. To see an example
+of that, check out computePi.py.
 '''
 # Import playgroundlog to enable logging
 from playground import playgroundlog
@@ -153,7 +157,7 @@ class ClientTest(object):
         self.messagesToSend = messagesToSend
         
     def sendMessages(self, client, echoServerAddr):
-        protocol = client.connect(echoProtocolClient, echoServerAddr, 101)
+        srcPort, protocol = client.connect(echoProtocolClient, echoServerAddr, 101)
         for message in self.messagesToSend:
             protocol.sendMessage(message)
 

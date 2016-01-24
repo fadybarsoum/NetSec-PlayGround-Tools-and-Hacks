@@ -624,7 +624,7 @@ class ClientTest(object):
         self._connType
         
     def runTest(self, clientFactory, client, addr, port):#protocol):
-        protocol = client.connect(clientFactory, addr, port, connectionType=self._connType)
+        srcPort, protocol = client.connect(clientFactory, addr, port, connectionType=self._connType)
         self._factory = clientFactory
         self._protocol = protocol.getApplicationLayer()
         conn = self._protocol.waitForConnection()

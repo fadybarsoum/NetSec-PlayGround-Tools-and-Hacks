@@ -506,7 +506,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             #print "Sending to peer", peerString
             peer = playground.network.common.PlaygroundAddress.FromString(peerString)
             # hardcoded port for now
-            prot = self.__playground.connect(self, peer, 800, connectionType="RAW")
+            srcPort, prot = self.__playground.connect(self, peer, 800, connectionType="RAW")
             prot = prot.getApplicationLayer()
             #prot.sendPythonCode(instruction, self)
             self.__openProts[peerString] = prot
@@ -679,7 +679,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         return True, ""
     
     def __startPurchase(self, addr, account, amount, memo, callback):
-        bankProtocolStack = self.__playground.connect(self.__bankFactory,
+        srcPort, bankProtocolStack = self.__playground.connect(self.__bankFactory,
                                                               BANK_FIXED_PLAYGROUND_ADDR, 
                                                               BANK_FIXED_PLAYGROUND_PORT,
                                                               connectionType="RAW")

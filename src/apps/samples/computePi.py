@@ -3,6 +3,7 @@ Created on Dec 4, 2013
 
 @author: sethjn
 '''
+from PlaygroundNode import PlaygroundNode, StandaloneTask
 import playground
 from playground.network.common import Timer
 import sys
@@ -96,7 +97,7 @@ class ComputePi(playground.network.client.sampleservers.MobileCodeClient.CodeCal
 # For use with PlaygroundNode.py on import
 ####################################
 class PlaygroundNodeControl(object):
-    
+    Name = "compute_pi"
     def __init__(self):
         self.serving = False
         self.client = None
@@ -126,36 +127,22 @@ class PlaygroundNodeControl(object):
         return True, ""
 control = PlaygroundNodeControl()
 
-Name = "compute_pi"
+Name = control.Name
 start = control.start
 stop = control.stop
 ########
         
         
 if __name__ == "__main__":
-    playgroundNode = int(sys.argv[3])
-    myAddress = playground.network.common.PlaygroundAddress(20151, 0, 0, playgroundNode)
+    playgroundAddrStr, mode, chaperoneAddr = sys.argv[1:]
+    playgroundAddr = playground.network.common.PlaygroundAddress.FromString(playgroundAddrStr)
+    runner = PlaygroundNode(playgroundAddr, chaperoneAddr, 9090)
+    computePiModule = PlaygroundNodeControl()
     
-    logctx = playground.playgroundlog.LoggingContext()
-    logctx.nodeId = myAddress.toString()
-    logctx.doPacketTracing = True
-    playground.playgroundlog.startLogging(logctx)
+    if mode == "server": startArgs = ["start_server"]
+    elif mode == "client": startArgs = ["start_client"]
+    elif mode == "client_server": startArgs = ["start_server", "start_client"]
+    else: raise Exception("Unknown mode [%s]" % mode)
     
-    client = playground.network.client.ClientBase(myAddress)
-    serverAddress, serverPortString = sys.argv[1:3]
-    serverPort = int(serverPortString)
-    
-    if playgroundNode > 0:
-        mobileCodeServer = playground.network.client.sampleservers.ClientMobileCodeServer()
-        client.listen(mobileCodeServer, 100)
-        client.connectToChaperone(serverAddress, serverPort)
-    else:
-        #mobileCodeClient = playground.network.client.sampleservers.MobileCodeClient(myAddress, 101)
-        computePi = ComputePi(client, playground.network.client.sampleservers.MobileCodeClient())
-        #client.listen(mobileCodeClient, 101)
-        client.runWhenConnected(lambda: computePi.start(10000000))
-        
-        # the client also runs its own server
-        mobileCodeServer = playground.network.client.sampleservers.ClientMobileCodeServer()
-        client.listen(mobileCodeServer, 100)
-        client.connectToChaperone(serverAddress, serverPort)
+    task = StandaloneTask(runner.startScript, [computePiModule, startArgs])
+    runner.startLoop(task)
