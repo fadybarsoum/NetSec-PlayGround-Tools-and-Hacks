@@ -113,8 +113,21 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
         
         # Set self.__handleServerResponse as a handler for the EchoProtocolMessage
         self.registerMessageHandler(EchoProtocolMessage, EchoClientResponse_StdOutHandler("GOT RESPONSE FROM SERVER:"))
+        self.__connected = False
+        self.__backlog = []
+        
+    def connectionMade(self):
+        self.__connected = True
+        for m in self.__backlog:
+            self.__sendMessageActual(m)
         
     def sendMessage(self, msg):
+        if self.__connected:
+            self.__sendMessageActual(msg)
+        else:
+            self.__backlog.append(msg)
+        
+    def __sendMessageActual(self, msg):
         # Get the builder for the EchoProtocolMessage
         echoMessageBuilder = MessageData.GetMessageBuilder(EchoProtocolMessage)
         
@@ -140,7 +153,7 @@ class ClientTest(object):
         self.messagesToSend = messagesToSend
         
     def sendMessages(self, client, echoServerAddr):
-        protocol = client.openClientConnection(echoProtocolClient, echoServerAddr, 101)
+        protocol = client.connect(echoProtocolClient, echoServerAddr, 101)
         for message in self.messagesToSend:
             protocol.sendMessage(message)
 
@@ -169,10 +182,10 @@ if __name__=="__main__":
         echoProtocolServer = EchoServer()
         
         # install the echoProtocolServer (factory) on playground port 101
-        client.installClientServer(echoProtocolServer, 101)
+        client.listen(echoProtocolServer, 101)
         
         # tell the playground client to connect to playground server and start running
-        client.connectToPlaygroundServer(serverAddress, serverPort)
+        client.connectToChaperone(serverAddress, serverPort)
         
         
     elif playgroundNode == 0:
@@ -193,4 +206,4 @@ if __name__=="__main__":
         client.runWhenConnected(lambda: tester.sendMessages(client, echoServerAddr))
         
         # Connect to Playground and go
-        client.connectToPlaygroundServer(serverAddress, serverPort)
+        client.connectToChaperone(serverAddress, serverPort)

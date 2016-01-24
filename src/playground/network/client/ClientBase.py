@@ -7,9 +7,10 @@ Created on Oct 23, 2013
 from playground.config import GlobalPlaygroundConfigData
 from playground.network.message import MessageData
 
-from playground.network.common import SimpleMessageHandler, Protocol, Packet, PlaygroundAddress, PlaygroundAddressPair
+from playground.network.common import SimpleMessageHandler, Protocol, StackingProtocolMixin, Packet, PlaygroundAddress, PlaygroundAddressPair
 from playground.network.common import MIBAddressMixin
 from playground.network.common import Error as NetworkError
+from playground.network.common import Timer
 
 from playground.crypto import CertificateDatabase
 
@@ -44,7 +45,8 @@ class ConnectionTypeFactory(object):
             if not t: continue
             clientFactory = config.get("connection_types.%s.client"%t, None)
             serverFactory = config.get("connection_types.%s.server"%t, None)
-            self.__types[t.strip()] = (self.__loadFactoryModule(clientFactory), self.__loadFactoryModule(serverFactory))
+            self.__types[t.strip()] = (clientFactory, serverFactory)
+            #(self.__loadFactoryModule(clientFactory), self.__loadFactoryModule(serverFactory))
             
     def __loadFactoryModule(self, moduleName):
         if moduleName == None or moduleName.lower() == "none": 
@@ -58,21 +60,87 @@ class ConnectionTypeFactory(object):
     def getClientFactory(self, connectionType):
         if not self.__types.has_key(connectionType):
             raise Exception("No Playground Connection Type: %s" % connectionType)
+        if isinstance(self.__types[connectionType][0], str):
+            self.__types[connectionType] = (self.__loadFactoryModule(self.__types[connectionType][0]), self.__types[connectionType][1])
         return self.__types[connectionType][0]
     
     def getServerFactory(self, connectionType):
         if not self.__types.has_key(connectionType):
             raise Exception("No Playground Connection Type: %s" % connectionType)
+        if isinstance(self.__types[connectionType][1], str):
+            self.__types[connectionType] = (self.__types[connectionType][0], self.__loadFactoryModule(self.__types[connectionType][1]))
         return self.__types[connectionType][1]
 ConnectionTypeFactoryInstance = ConnectionTypeFactory(configData)
+
+class PortData(object):
+    PORT_TYPE_INCOMING = 1
+    PORT_TYPE_OUTGOING = 2
+    
+    @classmethod
+    def CreateIncomingPort(cls, listeningFactory):
+        portData = PortData(cls.PORT_TYPE_INCOMING)
+        portData.listeningFactory = listeningFactory
+        portData.incomingConnections = {}
+        return portData
+        
+    @classmethod
+    def CreateOutgoingPort(cls, connectionProtocol, destination):
+        portData = PortData(cls.PORT_TYPE_OUTGOING)
+        portData.connectionProtocol = connectionProtocol
+        portData.destination = destination
+        return portData
+        
+    def __init__(self, portType):
+        self.portType = portType
+        self.listeningFactory = None
+        self.incomingConnections = None
+        self.connectionProtocol = None
+        self.destination = None
+        
+    def isListening(self):
+        return self.listeningFactory != None
+    
+    def spawnNewConnection(self, srcAddrPair, dstAddrPair):
+        if self.portType == PortData.PORT_TYPE_INCOMING:
+            if self.incomingConnections.has_key(dstAddrPair):
+                return False, "Already have a connection for this destination"
+            self.incomingConnections[dstAddrPair] = self.listeningFactory.buildProtocol(srcAddrPair)
+            return True, self.incomingConnections[dstAddrPair]
+        else:
+            return False, "Outgoing connections cannot spawn new connections"
+    
+    def isConnectedTo(self, dstAddrPair):
+        if self.portType == PortData.PORT_TYPE_INCOMING:
+            return self.incomingConnections.has_key(dstAddrPair)
+        else:
+            return self.destination == dstAddrPair
+        
+    def getConnectionList(self):
+        if self.portType == PortData.PORT_TYPE_INCOMING:
+            return self.incomingConnections.keys()
+        else:
+            return [self.destination]
+        
+    def getConnectionProtocol(self, dstAddrPair):
+        if self.portType == PortData.PORT_TYPE_INCOMING:
+            return self.incomingConnections.get(dstAddrPair,None)
+        elif self.portType == PortData.PORT_TYPE_OUTGOING:
+            logger.debug("PortData::getConnectionProtocol outgoing. Compare %s with %s" % (self.destination,
+                                                                                           dstAddrPair))
+            if self.destination == dstAddrPair:
+                logger.debug("%s equals %s" % (self.destination, dstAddrPair))
+                return self.connectionProtocol
+            logger.debug("%s != %s" % (self.destination, dstAddrPair))
+            return None
+        return None
 
 class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMixin):
     """
     ClientBase represents the basic connection to the Playground network. To
     build a Playground Application, one creates a Server Factory/Protocol that plugs into
-    the ClientBase using installClientServer and then creates a client factory/Protocol
+    the ClientBase using 'listen' and then creates a client factory/Protocol
     that connects to the installed client server over PLAYGROUND using the
-    openClientConnection method.
+    'connect' method.
     
     For asychronous handling, use the method runWhenConnected() to start processing
     after the initial connection to PLAYGROUND is achieved. Alternatively, call
@@ -107,7 +175,7 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
         self.__addr = addr
         self.__connectionState = self.ConnectionState.PRE_CONNECT
         self.__protocol = None
-        self.__servers = {}
+        self.__ports = {}
         self.__connectionData = None
         self.__peerCallbacks = []
         self.__waitForPlayground = []
@@ -124,7 +192,7 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
                                                             self.__getChangeStateFunctor(self.ConnectionState.DISCONNECTED)
                                                             )
                                     )
-        self.registerMessageHandler(playground.base.ClientToClientMessage, Client2ClientHandler(self.__servers, self.__closeConnection))
+        self.registerMessageHandler(playground.base.ClientToClientMessage, Client2ClientHandler(self.__ports, self.__closeConnection))
         self.registerMessageHandler(playground.base.Peers, self.__peersReceived)
         
     def __initMibServer(self):
@@ -137,7 +205,7 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
                 authCert = CertificateDatabase.GetDatabase().loadX509(authCert)
             trustedPrefix = mibServerConfig.get("trusted_prefix", "")
             self.__mibServer = MIBServer.GetMibServerForAddr(self.__addr, authCert, trustedPrefix)
-            self.installClientServer(self.__mibServer, port, connType)
+            self.listen(self.__mibServer, port, connType)
         
     def __loadMibs(self):
         if self.MIBAddressEnabled():
@@ -148,19 +216,18 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
         if mib.endswith(self.Mibs.CURRENT_STATE):
             return [str(self.__connectionState)]
         elif mib.endswith(self.Mibs.PORTS_IN_USE):
-            portData = []
-            for port in self.__servers.keys():
-                server, connections = self.__servers[port]
-                if server:
-                    portData.append("Port %d: %s" % (port, str(server)))
-                    for destAddr, destPort in connections.keys():
-                        appProt = connections[(destAddr, destPort)].getApplicationLayer()
-                        portData.append("%d serving %s protocol to %s/%d" % (port, str(appProt), destAddr, destPort))
+            portInfo = []
+            for port, portData in self.__ports.items():
+                if portData.portType == PortData.PORT_TYPE_INCOMING:
+                    portInfo.append("Port %d: %s" % (port, str(portData.listeningFactory)))
+                    for destAddr, destPort in portData.incomingConnections.keys():
+                        appProt = portData.incomingConnections[(destAddr, destPort)].getApplicationLayer()
+                        portInfo.append("%d serving %s protocol to %s/%d" % (port, str(appProt), destAddr, destPort))
                 else:
-                    for destAddr, destPort in connections.keys():
-                        appProt = connections[(destAddr, destPort)].getApplicationLayer()
-                        portData.append("Src port %d open %s protocol to %s/%d" % (port, str(appProt), destAddr, destPort))
-            return portData
+                    appProt = portData.connectionProtocol.getApplicationLayer()
+                    destAddr, destPort = portData.destination
+                    portInfo.append("Src port %d open %s protocol to %s/%d" % (port, str(appProt), destAddr, destPort))
+            return portInfo
         return []
         
     def __playgroundConnected(self, connectionPod):
@@ -207,50 +274,71 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
         srcPort = srcAddrPair.port
         dstAddr = dstAddrPair.host
         dstPort = dstAddrPair.port
-        dstKey = (dstAddr.toString(), dstPort)
         
-        if self.__servers.has_key(srcPort) and self.__servers[srcPort][1].has_key(dstKey):
-            protocolToClose = self.__servers[srcPort][1][dstKey]
+        protocolToClose = None
+        if self.__ports.has_key(srcPort):
+            portData = self.__ports[srcPort]
+            if portData.portType == PortData.PORT_TYPE_INCOMING:
+                if portData.incomingConnections.has_key(dstAddrPair):
+                    protocolToClose = portData.incomingConnections[dstAddrPair]
+                    logger.info("ClientBase closing protocol %s connected to peer %s because %s" % (protocolToClose, dstAddrPair, reason))
+                    del portData.incomingConnections[dstAddrPair]
+                else:
+                    logger.error("ClientBase tried to close %s server connection to %s but not found." % (srcAddrPair, dstAddrPair))
+            elif portData.portType == PortData.PORT_TYPE_OUTGOING:
+                if portData.destination == dstAddrPair:
+                    if self.__mibAddressesConfigured.has_key(srcPort):
+                        self.__mibAddressesConfigured[srcPort].disableMIBAddress()
+                        del self.__mibAddressesConfigured[srcPort]
+                    protocolToClose = portData.connectionProtocol
+                    del self.__ports[srcPort]
+                else:
+                    logger.error("ClientBase tried to close %s outgoing connection to %s but not found" % (srcAddrPair, dstAddrPair))
+        else:
+            logger.error("ClientBase tried to close %s connection to %s, but not found." % (srcAddrPair, dstAddrPair))
+        if protocolToClose:
             protocolToClose.connectionLost(reason)
-            del self.__servers[srcPort][1][dstKey]
-            if self.__servers[srcPort][0] == None:
-                # this is an outgoing connection. Delete srcPort
-                # disable mib address if we configured it
-                if self.__mibAddressesConfigured.has_key(srcPort):
-                    self.__mibAddressesConfigured[srcPort].disableMIBAddress()
-                    del self.__mibAddressesConfigured[srcPort]
-                del self.__servers[srcPort]
         
     def getAddress(self): return PlaygroundAddress.FromString(self.__addr.toString())
         
     def getPlaygroundState(self): return self.__connectionState
     
-    def installClientServer(self, protFactory, port, connectionType=None):
+    def listen(self, protFactory, port, connectionType=None):
         """
         Install a client application server on a port for this client base.
         Incoming packets not previously identified will produce a new protocol
         """
-        if self.__servers.has_key(port):
-            raise Exception("Server already exists on port %d" % port)
+        if self.__ports.has_key(port):
+            logger.error("Server already exists on port %d" % port)
+            return False
         if connectionType:
             clientFactoryStack = ConnectionTypeFactoryInstance.getServerFactory(connectionType)
             protFactory = clientFactoryStack(protFactory)
         if self.__mibServer and not protFactory.MIBAddressEnabled():
             self.__mibAddressesConfigured[port] = protFactory
             self.runWhenConnected(lambda: protFactory.configureMIBAddress("ClientServer_%d" % port, self, self.__mibServer))
-        self.__servers[port] = (protFactory, {})
+        self.__ports[port] = PortData.CreateIncomingPort(protFactory)
+        return True
         
-    def closeClientServer(self, port):
-        if not self.__servers.has_key(port):
-            raise Exception("No server on port %d" % port)
+    def close(self, port):
+        if not self.__ports.has_key(port):
+            logger.error("No server on port %d" % port)
+            return False
         if self.__mibAddressesConfigured.has_key(port):
             self.__mibAddressesConfigured[port].disableMIBAddress()
             del self.__mibAddressesConfigured[port]
-        del self.__servers[port]
+        # if this has active connections, try to close them all
+        portData = self.__ports[port]
+        for addrPair in portData.getConnectionList():
+            protocol = portData.getConnectionProtocol(addrPair)
+            if protocol:
+                protocol.connectionLost(reason="Port forcibly closed")
+        del self.__ports[port]
+        return True
         
-    def openClientConnection(self, protFactory, dstAddr, dstPort, connectionType=None):
+    def connect(self, protFactory, dstAddr, dstPort, connectionType=None, getFullStack=False):
         """
-        Open a connection to another Playground Client (server). 'protFactory' is
+        Open a connection to another Playground Node. 'protFactory' is
         used even though we'll only need one protocol to keep standard with twisted
         usage
         """
@@ -262,23 +350,38 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
         for srcPort in range(1000,65536):
             """ If there is something on this port, it is either a server or an open connection """
             """ Either way, we can't use it """
-            if not self.__servers.has_key(srcPort):
+            if not self.__ports.has_key(srcPort):
                 # We don't need a factory on this port because it will not receive 
                 # incoming connections.
                 srcAddrPair = PlaygroundAddressPair(self.__addr, srcPort)
                 dstAddrPair = PlaygroundAddressPair(dstAddr, dstPort)
-                transport = ClientApplicationTransport(self.__protocol.transport, srcAddrPair, dstAddrPair, self.__closeConnection)
+                transport = ClientApplicationTransport(self.__protocol.transport, srcAddrPair, dstAddrPair, self.__closeConnection, self.__protocol.multiplexingProducer())
                 prot = protFactory.buildProtocol(srcAddrPair)
+                fullstack = [prot]
+                while isinstance(fullstack[-1], StackingProtocolMixin) and fullstack[-1].getHigherProtocol():
+                    fullstack.append(fullstack[-1].getHigherProtocol())
                 
                 if self.__mibServer and not protFactory.MIBAddressEnabled():
                     key = "%s_(%d)" % (str(dstAddr), dstPort)
                     protFactory.configureMIBAddress("ClientConnection_to_"+key, self, self.__mibServer)
                     self.__mibAddressesConfigured[srcPort] = protFactory
-                self.__servers[srcPort] = (None, {(dstAddr.toString(), dstPort): prot})
+                logger.info("Creating outgoing port on %d with dst %s " % (srcPort, dstAddrPair))
+                self.__ports[srcPort] = PortData.CreateOutgoingPort(prot, dstAddrPair)
                 
                 prot.makeConnection(transport)
-                return prot
-        raise PlaygroundError("No available port between 1000,65536!")
+                if getFullStack: return (srcPort, fullstack)
+                else: return (srcPort, fullstack[-1])
+        logger.error("No available port between 1000,65536!")
+        return (None, None)
+    
+    def getPortData(self, port):
+        if self.__ports.has_key(port):
+            if self.__ports[port].portType == PortData.PORT_TYPE_INCOMING:
+                return ("SERVER",self.__ports[port].listeningFactory,self.__ports[port].incomingConnections.items())
+            elif self.__ports[port].portType == PortData.PORT_TYPE_OUTGOING:
+                return ("CLIENT",self.__ports[port].connectionProtocol,self.__ports[port].destination)
+        else:
+            return ("CLOSED",)
         
     def getPeers(self, callback):
         """
@@ -308,7 +411,7 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
                 self.reportException(e)
             del self.__mibProtocols[addr]
         else:
-            self.__protocol.callLater(2*60, lambda: self.__checkMibProtocolFreshness(addr))
+            Timer.callLater(2*60, lambda: self.__checkMibProtocolFreshness(addr))
         
     def sendMIB(self, addr, port, mib, args, callback, timeout=30):
         if addr == "server":
@@ -330,11 +433,11 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
                 authAddr = ".".join(addrParts)
                 if self.__mibAuthInfo.has_key(authAddr):
                     connType, privKey = self.__mibAuthInfo[authAddr]
-                    prot = self.openClientConnection(SimpleMIBClientFactory(), addr, port, connType)
+                    prot = self.connect(SimpleMIBClientFactory(), addr, port, connType)
                     prot = prot.getApplicationLayer()
                     prot.setMIBServerAuthData(privKey)
                     self.__mibProtocols[str(addr)] = [prot, time.time()]
-                    self.__protocol.callLater(2*60, lambda: self.__checkMibProtocolFreshness(str(addr)))
+                    Timer.callLater(2*60, lambda: self.__checkMibProtocolFreshness(str(addr)))
                     return prot.sendMIB(mib, args, callback, timeout=timeout)
                 addrParts.pop(-1)
             raise Exception("Not configured to get mib from " + str(addr))
@@ -346,7 +449,7 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
         
         return self.__protocol
     
-    def connectToPlaygroundServer(self, ipAddress, tcpPort, runReactor=True):
+    def connectToChaperone(self, ipAddress, tcpPort, runReactor=True):
         """
         Connect to the playground server and start the Twisted reactor loop. If you need to
         connect to the server without starting the reactor, use this as any other Twisted factory
@@ -366,12 +469,51 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
         if self.__connectionState != self.ConnectionState.CONNECTED:
             self.__waitForPlayground.append(f)
         else:
-            reactor.callLater(0, f)
+            Timer.callLater(0, f)
         
     def disconnectFromPlaygroundServer(self, stopReactor=False):
         if self.__protocol:
             self.__protocol.transport.loseConnection()
-        if stopReactor: reactor.stop()
+        if stopReactor: 
+            reactor.disconnectAll()
+            reactor.stop()
+            
+class ClientTransportMultiplexingProducer(object):
+    def __init__(self):
+        self.__producers = {}
+        self.__minBacklogToClear = 0
+        
+    def signalRawWrite(self):
+        if self.__minBacklogToClear:
+            self.__minBacklogToClear
+            if not self.__minBacklogToClear:
+                self.resumeProducing()
+        
+    def registerProducer(self, producer, registeringTransport):
+        if self.__producers.has_key(producer):
+            raise Exception("Cannot double register a producer")
+        self.__producers[producer] = registeringTransport
+        
+    def unregisterProducer(self, producer):
+        del self.__producers[producer]
+        
+    def resumeProducing(self):
+        for p in self.__producers.keys():
+            ptransport = self.__producers[p]
+            transportBacklog = ptransport and ptransport.productionBacklog() or 0
+            if not transportBacklog: # no backlog on this producer's transport. Let it resume
+                p.resumeProducing()
+            else:
+                if not self.__minBacklogToClear: # There was a backlog and we have no global backlog. Set it.
+                    self.__minBacklogToClear = transportBacklog
+                else: # minimize our wait 
+                    self.__minBacklogToClear = min(self.__minBacklogToClear, transportBacklog)
+        
+    def pauseProducing(self):
+        for p in self.__producers.keys(): p.pauseProducing()
+        
+    def stopProducing(self):
+        for p in self.__producers.keys(): p.stopProducing()
 
 class ClientBaseProtocol(SimpleMIBClientProtocol):
     def __init__(self, client, playgroundAddress, connectionMadeCallback, connectionLostCallback):
@@ -380,11 +522,15 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
         self.__addr = playgroundAddress
         self.__connectionMade  = connectionMadeCallback
         self.__connectionLost = connectionLostCallback
+        self.__transportProducer = ClientTransportMultiplexingProducer()
+        
+    def multiplexingProducer(self): return self.__transportProducer
         
     def connectionLost(self, reason=None):
         self.__connectionLost()
         """ clear circular connections """
         self.__client = None
+        self.transport.unregisterProducer()
         
     def connectionMade(self):
         registerClientMsg = MessageData.GetMessageBuilder(playground.base.RegisterClient)
@@ -392,6 +538,7 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
             raise Exception("Cannot find RegisterClient definition")
         registerClientMsg["address"].setData(self.__addr.toString())
         packetBuffer = Packet.SerializeMessage(registerClientMsg)
+        self.transport.registerProducer(self.__transportProducer, True)
         self.__connectionMade()
         
         packetTrace(logger, registerClientMsg, "Sending registration to playground server")

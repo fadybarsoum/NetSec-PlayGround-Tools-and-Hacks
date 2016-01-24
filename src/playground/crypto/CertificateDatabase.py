@@ -81,4 +81,4 @@ class CertificateDatabase(object):
             privKeyData = f.read()
         if not privKeyData:
             raise Exception("No private key data in key file!")
-        return (chain, privKeyName)
+        return (chain, privKeyData)

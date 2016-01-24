@@ -25,14 +25,7 @@ class ClientApplicationServer(StackingFactoryMixin):
     The problem is that, at present, it doesnt' do much. More functionality
     may be added later.
     """
-    def buildProtocol(self, addr):
-        """
-        The default buildProtocol method returns the object's Protocol class
-        instantiated with the ClientApplicationServer as the parameter. 
-        Subclasses MUST re-implement this method if they do not provide
-        a Protocol class
-        """
-        return self.Protocol(self, addr)
+    # buidProtocol now in StackingFactoryMixin
     
 class ClientMobileCodeServer(ClientApplicationServer):
     """
@@ -60,14 +53,7 @@ class ClientApplicationClient(StackingFactoryMixin):
     The problem is that, at present, it doesn't do much. More functionality
     may be added later.
     """
-    def buildProtocol(self, addr):
-        """
-        The default buildProtocol method returns the object's Protocol class
-        instantiated with the ClientApplicationClient as the parameter.
-        Subclasses MUST re-implement this method if they do not provide
-        a Protocol class
-        """
-        return self.Protocol(self, addr)
+    # build protocol now in stacking factory mixin
 
 class MobileCodeClient(ClientApplicationClient):
     """

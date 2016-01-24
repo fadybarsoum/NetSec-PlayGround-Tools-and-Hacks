@@ -1,6 +1,6 @@
 from ClientBase import ClientBase
 import ClientApplicationServer
-from ClientApplicationTransport import ClientApplicationTransport
+from ClientApplicationTransport import ClientApplicationTransport, StackingTransportMixin
 from MIBClient import SimpleMIBClientProtocol, MIBServer
 
 sampleservers = ClientApplicationServer

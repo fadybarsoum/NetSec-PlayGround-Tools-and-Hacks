@@ -39,8 +39,8 @@ def main(args):
     
     if mode == "once":
         server = playground.network.server.PlaygroundServer('localhost', port)
-        server.setNetworkErrorRate(0.0000001)
-        #server.setNetworkLossRate(0.01)
+        server.setNetworkErrorRate(1,10,10000) # error rate ranges between 1 in 10000 and 10 in 10000 (1/1000)
+        server.setNetworkLossRate(1,5,100) # Packet loss rate ranges between 1 in 100 and 5 in 100 (1/20)
         server.run()
     elif mode == "daemon":
         failedCount = 0

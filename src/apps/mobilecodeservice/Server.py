@@ -12,7 +12,7 @@ from ServiceMessages import OpenSession, SessionOpen, SessionOpenFailure, Encryp
 from ServiceMessages import PurchaseDecryptionKey, RunMobileCodeFailure, AcquireDecryptionKeyFailure, Heartbeat
 from ServiceMessages import RerequestDecryptionKey, GeneralFailure, ResultDecryptionKey, SessionRunMobileCode
 
-import random, time, math, os, dbm, pickle, sys, binascii
+import random, time, math, os, shelve, pickle, sys, binascii
 
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA
@@ -233,7 +233,7 @@ class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
         ctx.finishCallback = self.__mobileCodeComplete
         aesKey = os.urandom(16)
         aesIv = os.urandom(16)
-        succeed, errmsg = self.__factory.createMobileCodeRecord(ctx.clientNonce, ctx.serverNonce, aesKey, aesIv)
+        succeed, errmsg = self.__factory.createMobileCodeRecord(ctx.clientNonce, ctx.serverNonce, aesKey, aesIv, msgObj.MaxRuntime)
         if not succeed:
             return self.__error("Could not run this code. Reason: " + errmsg)
         transport = WrapMobileCodeResultTransport(self.transport, aesKey, aesIv, ctx)
@@ -298,11 +298,24 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         self.__bankCert = bankCert
         self.__receiptDbFile = receiptDb
         self.__keyDbFile = keyDb
-        self.__receiptDb = dbm.open(receiptDb, "c")
-        self.__keyDb = dbm.open(keyDb,"c")
+        self.__receiptDb = shelve.open(receiptDb, "c")
+        self.__keyDb = shelve.open(keyDb,"c")
+        self.__clearStaleKeys()
         self.__inprocessCode = set([])
         rsaKey = RSA.importKey(bankCert.getPublicKeyBlob())
         self.__validater = PKCS1_v1_5.new(rsaKey)
+        
+    def __clearStaleKeys(self):
+        staleList = []
+        for searchKey in self.__receiptDb.keys():
+            keyData  = self.__receiptDb[searchKey]
+            currentKeyType, timestamp = keyData[0], keyData[1]
+            if time.time() > timestamp:
+                staleList.append(searchKey)
+        for searchKey in staleList:
+            del self.__receiptDb[searchKey]
+            if self.__keyDb.has_key(searchKey):
+                del self.__keyDb[searchKey]
         
     def __loadMibs(self):
         if self.MIBAddressEnabled():
@@ -321,21 +334,22 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         self.__loadMibs()
         
     def __save(self):
+        self.__clearStaleKeys()
         self.__receiptDb.close()
         self.__keyDb.close()
-        self.__receiptDb = dbm.open(self.__receiptDbFile, "w")
-        self.__keyDb = dbm.open(self.__keyDbFile,"w")
+        self.__receiptDb = shelve.open(self.__receiptDbFile, "w")
+        self.__keyDb = shelve.open(self.__keyDbFile, "w")
         
     def buildProtocol(self, addr):
         return ServerProtocol(self, addr, self.__accountName)
     
-    def createMobileCodeRecord(self, clientNonce, serverNonce, aesKey, aesIv):
+    def createMobileCodeRecord(self, clientNonce, serverNonce, aesKey, aesIv, maxRuntime):
         searchKey = str(clientNonce) + str(serverNonce)
         self.__inprocessCode.add(searchKey)
         if self.__keyDb.has_key(searchKey) or self.__receiptDb.has_key(searchKey):
             return False, "Duplicate cookie"
-        self.__keyDb[searchKey] = aesKey + aesIv
-        self.__receiptDb[searchKey] = "UNKNOWN,"
+        self.__keyDb[searchKey] = (aesKey, aesIv)
+        self.__receiptDb[searchKey] = ("UNKNOWN",time.time()+maxRuntime)
         self.__save()
         return True, ""
     
@@ -345,7 +359,7 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
             return False, "No such cookie"
         if searchKey in self.__inprocessCode:
             self.__inprocessCode.remove(searchKey)
-        self.__receiptDb[searchKey] = "COST,"+str(cost)
+        self.__receiptDb[searchKey] = ("COST",time.time()+300,cost)
         self.__save()
         return True, ""
     
@@ -353,20 +367,19 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         searchKey = str(clientNonce) + str(serverNonce)
         if not self.__keyDb.has_key(searchKey) or not self.__receiptDb.has_key(searchKey):
             return False, "No such cookie"
-        if not self.__receiptDb[searchKey].startswith("COST,"):
+        if not self.__receiptDb[searchKey][0] == "COST":
             return False, "Not expecting a purchase"
         if not self.__validater.verify(SHA.new(receipt), receiptSignature):
             return False, "Signature failed"
         ll = pickle.loads(receipt)
         if ll.memo(self.__accountName) != searchKey:
             return False, "Memo is not equal to clientNonce+serverNonce"
-        costCode = self.__receiptDb[searchKey]
-        expectedCost = int(costCode.replace("COST,",""))
+        costCode, timestamp, expectedCost = self.__receiptDb[searchKey]
         if ll.getTransactionAmount(self.__accountName) < expectedCost:
             remaining = expectedCost - ll.getTransactionAmount(self.__accountName)
-            self.__receiptDb[searchKey] = "COST,"+str(remaining)
+            self.__receiptDb[searchKey] = ("COST",remaining)
             return False, "Insufficient purchase"
-        self.__receiptDb[searchKey]="RECEIPT,"+receipt+receiptSignature
+        self.__receiptDb[searchKey]=("RECEIPT",time.time()+300,receipt,receiptSignature)
         self.__save()
         return True, ""
     
@@ -375,16 +388,12 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         if not self.__keyDb.has_key(searchKey) or not self.__receiptDb.has_key(searchKey):
             logger.error("Attempt to get decryption key, iv for %s, but search key not found" % searchKey)
             return None, None
-        if not self.__receiptDb[searchKey].startswith("RECEIPT,"):
-            rCode = self.__receiptDb[searchKey]
-            index = rCode.find(",")
-            if index == -1: index = len(rCode)
-            rCode = rCode[:index]
+        if not self.__receiptDb[searchKey][0] == "RECEIPT":
+            rCode = self.__receiptDb[searchKey][0]
             logger.error("Attempt to get decryption key, iv for %s, but expected receipt code is" % (searchKey,
                                                                                                      rCode))
             return None, None
-        combinedData = self.__keyDb[searchKey]
-        key, iv = combinedData[:16], combinedData[16:]
+        key, iv = self.__keyDb[searchKey]
         logger.info("Consistency check: %s Produced key (%s) and iv (%s)" % (searchKey,
                                                                              binascii.hexlify(key), 
                                                                              binascii.hexlify(iv)))
@@ -418,5 +427,5 @@ if __name__ == "__main__":
     keysdbFile = "keysdb"+playgroundAddress.toString()
     server = Server(accountName, cert, receiptdbFile, keysdbFile)
     client = playground.network.client.ClientBase(playgroundAddress)
-    client.installClientServer(server, MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT, connectionType="RAW")
-    client.connectToPlaygroundServer(ipAddr, ipPort)
+    client.listen(server, MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT, connectionType="RAW")
+    client.connectToChaperone(ipAddr, ipPort)

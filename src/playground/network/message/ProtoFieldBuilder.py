@@ -130,10 +130,10 @@ class StringFieldValue(ProtoFieldValue):
     struct string requires a size.
     """
     
-    LENGTH_CODE = "H"
+    LENGTH_CODE = "I"
     STRING_CODE = "%ds"
     STRUCT_CODE = "!"+LENGTH_CODE+STRING_CODE
-    MAX_SIZE = (2**16)-1
+    MAX_SIZE = (2**32)-1
     
     def setData(self, newValue):
         self._data = str(newValue)
@@ -210,6 +210,12 @@ class ListFieldValue(ProtoFieldValue):
         
     def init(self):
         self._data = []
+        
+    def setData(self, rawList):
+        self.init()
+        for dataElm in rawList:
+            self._data.append(self.__type())
+            self._data[-1].setData(dataElm)
         
     def add(self, elementCount=1):
         """

@@ -154,7 +154,7 @@ class ParallelTSP(MIBAddressMixin):
     MIB_CURRENT_BEST_PATH_DISTANCE = "CurrentBestTSPPathDistance"
     MIB_CURRENT_CODE = "CurrentCode"
     
-    def __init__(self, n=40):
+    def __init__(self, n=40, pathsPerParallel=None):
         self.__matrix = generateDistanceMatrix(n)
         self.__parallelCodes = {}
         self.__citiesStr = "[\n"
@@ -163,6 +163,7 @@ class ParallelTSP(MIBAddressMixin):
         self.__citiesStr += "]"
         self.__maxPaths = maxPaths(n)
         self.__curPath = 0
+        self.__pathsPerParallel = pathsPerParallel and pathsPerParallel or self.PATHS_PER_PARALLEL
 
         self.__shortest = None
         self.__bestPath = None
@@ -232,7 +233,7 @@ class ParallelTSP(MIBAddressMixin):
         if not self.hasNext():
             return None, None
         start = self.__curPath
-        end = self.__curPath + self.PATHS_PER_PARALLEL
+        end = self.__curPath + self.__pathsPerParallel
         instructionStr = TSPCodeTemplate % (self.__citiesStr, self.__curPath, end)
         #instruction = playground.network.common.DefaultPlaygroundMobileCodeUnit(codeStr)
         id = random.randint(0,(2**64)-1)
@@ -405,10 +406,10 @@ def main():
     playground.playgroundlog.startLogging(logctx)
     
     parallelMaster = BasicMobileCodeFactory(client, bankFactory)
-    ptsp = ParallelTSP()
+    ptsp = ParallelTSP(pathsPerParallel=3000000)
     #client.runWhenConnected(lambda: ptsp.configureMIBAddress("ParallelTSP", client, client.MIBRegistrar()))
     client.runWhenConnected(lambda: parallelMaster.runParallel(ptsp, lambda: finish(ptsp)))
-    client.connectToPlaygroundServer(ipServer, ipPort)
+    client.connectToChaperone(ipServer, ipPort)
     
 if __name__ == "__main__":
     main()

@@ -9,6 +9,9 @@ from playground.network.message import MessageData
 from playground.error import ErrorHandlingMixin
 from Error import PacketSerializationError, PacketReconstructionError
 
+import logging, zlib
+logger = logging.getLogger(__name__)
+
 ## TODO: change static methods to class methods
 
 class Packet(ErrorHandlingMixin):
@@ -19,13 +22,21 @@ class Packet(ErrorHandlingMixin):
     '''
     
     MAGIC_PREFIX = 0x91A7584D
-    HEADER_PREFIX_FORMAT = "!QQ"
+    HEADER_PREFIX_FORMAT = "!QQI"
     HEADER_PREFIX_SIZE = struct.calcsize(HEADER_PREFIX_FORMAT)
     
     BUFFER_STATUS_NO_HEADER_YET = "Not enough length for packet playground header yet"
     BUFFER_STATUS_INCOMPLETE = "Buffer not yet complete for full message"
     BUFFER_STATUS_NO_MAGIC_PREFIX = "Buffer does not start with magic prefix"
     BUFFER_STATUS_CONTAINS_MESSAGE = "Buffer contains at least one message"
+    BUFFER_STATUS_BAD_LEN = "Buffer length checksum mismatch"
+    
+    @staticmethod
+    def lengthChecksum(mLen):
+        """
+        Not happy about adding on a full 4 bytes...
+        """
+        return zlib.adler32(struct.pack("!Q",mLen))
     
     @staticmethod
     def SerializeMessage(msgDef):
@@ -33,7 +44,7 @@ class Packet(ErrorHandlingMixin):
         Given an initialized message definition, generate the serialized packet. The
         packet will include a PLAYGROUND header:
         
-        [ MAGIC NUMBER (8 bytes) | Message Length (8 bytes) ]
+        [ MAGIC NUMBER (8 bytes) | Message Length (8 bytes) | Length Checksum (2 bytes) ]
         
         Note that the Message Length ignores the header.
         """
@@ -45,7 +56,8 @@ class Packet(ErrorHandlingMixin):
             raise validationResult
         msgBuf = msgDef.serialize()
         msgBuf = struct.pack("!B%dsB%ds" % (len(msgID), len(version)), len(msgID), msgID, len(version), version) + msgBuf
-        header = struct.pack(Packet.HEADER_PREFIX_FORMAT, Packet.MAGIC_PREFIX, len(msgBuf))
+        msgBufLen = len(msgBuf)
+        header = struct.pack(Packet.HEADER_PREFIX_FORMAT, Packet.MAGIC_PREFIX, msgBufLen, Packet.lengthChecksum(msgBufLen))
         return header + msgBuf
     
     @staticmethod
@@ -56,13 +68,16 @@ class Packet(ErrorHandlingMixin):
         then sees if the buffer is appropriately large.
         """
         bufLen = len(buf) - offset
-        if bufLen < Packet.HEADER_PREFIX_SIZE: return Packet.BUFFER_STATUS_NO_HEADER_YET
-        prefix, fullLen = struct.unpack_from(Packet.HEADER_PREFIX_FORMAT, buf, offset)
+        if bufLen < Packet.HEADER_PREFIX_SIZE: 
+            return (Packet.BUFFER_STATUS_NO_HEADER_YET, "Missing %d bytes for header" % (Packet.HEADER_PREFIX_SIZE - bufLen))
+        prefix, fullLen, chk = struct.unpack_from(Packet.HEADER_PREFIX_FORMAT, buf, offset)
         if prefix != Packet.MAGIC_PREFIX:
-            return Packet.BUFFER_STATUS_NO_MAGIC_PREFIX
+            return (Packet.BUFFER_STATUS_NO_MAGIC_PREFIX, "Prefix is %d" % prefix)
+        if chk != Packet.lengthChecksum(fullLen):
+            return (Packet.BUFFER_STATUS_BAD_LEN, "Bad length checksum. Expected %d but got %d" % (chk, Packet.lengthChecksum(fullLen)))
         if bufLen >= (fullLen + Packet.HEADER_PREFIX_SIZE):
-            return Packet.BUFFER_STATUS_CONTAINS_MESSAGE
-        return Packet.BUFFER_STATUS_INCOMPLETE
+            return (Packet.BUFFER_STATUS_CONTAINS_MESSAGE, None)
+        return (Packet.BUFFER_STATUS_INCOMPLETE, "Missing %d bytes for body" % ((fullLen + Packet.HEADER_PREFIX_SIZE) - bufLen))
     
     @staticmethod
     def DeserializeMessage(buf, offset=0):
@@ -75,9 +90,11 @@ class Packet(ErrorHandlingMixin):
         
         2/15/2014 - Added version management
         """
-        prefix, fullLen = struct.unpack_from(Packet.HEADER_PREFIX_FORMAT, buf, offset)
+        prefix, fullLen, chk = struct.unpack_from(Packet.HEADER_PREFIX_FORMAT, buf, offset)
         if prefix != Packet.MAGIC_PREFIX:
             raise PacketReconstructionError("Buffer does not point to the beginning of a playground message!")
+        if chk!= Packet.lengthChecksum(fullLen):
+            raise PacketReconstructionError("Buffer length has invalid checksum")
         offset += Packet.HEADER_PREFIX_SIZE
         
         nameLen = struct.unpack_from("!B", buf, offset)[0]
@@ -127,14 +144,17 @@ class PacketStorage(object):
         Client code should repeatedly call popMessage until it returns None.
         """
         prefixOffset = 0
-        while prefixOffset < len(self.storage) and Packet.BufferStatus(self.storage, prefixOffset) == Packet.BUFFER_STATUS_NO_MAGIC_PREFIX:
+        while prefixOffset < len(self.storage) and Packet.BufferStatus(self.storage, prefixOffset)[0] in [Packet.BUFFER_STATUS_NO_MAGIC_PREFIX, Packet.BUFFER_STATUS_BAD_LEN]:
             prefixOffset += 1
         self.storage = self.storage[prefixOffset:]
         try:
-            if Packet.BufferStatus(self.storage) == Packet.BUFFER_STATUS_CONTAINS_MESSAGE:
+            if Packet.BufferStatus(self.storage)[0] == Packet.BUFFER_STATUS_CONTAINS_MESSAGE:
                 handler, packetSize = Packet.DeserializeMessage(self.storage)
                 self.storage = self.storage[packetSize:]
+                logger.debug("Packet::popMessage() Got handler for fully recovered message")
                 return handler
+            else:
+                logger.debug("Packet::popMessage() status is %s (storage size %d)" % (Packet.BufferStatus(self.storage), len(self.storage)))
         #except PacketReconstructionError, e:
         except Exception, e:
             """
@@ -150,7 +170,7 @@ class PacketStorage(object):
             Try to find the beginning of an uncorrupted stream
             """
             prefixOffset = 1
-            while prefixOffset < len(self.storage) and not Packet.BufferStatus(self.storage, prefixOffset) == Packet.BUFFER_STATUS_NO_MAGIC_PREFIX:
+            while prefixOffset < len(self.storage) and not Packet.BufferStatus(self.storage, prefixOffset)[0] in [Packet.BUFFER_STATUS_NO_MAGIC_PREFIX, Packet.BUFFER_STATUS_BAD_LEN]:
                 prefixOffset + 1
             self.storage = self.storage[prefixOffset:]
             return self.popMessage(errorReporter)

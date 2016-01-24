@@ -66,6 +66,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         self.registerMessageHandler(EncryptedMobileCodeResult, self.__handleEncryptedResult)
         self.registerMessageHandler(ResultDecryptionKey, self.__handleDecryptionKeyResult)
         self.registerMessageHandler(AcquireDecryptionKeyFailure, self.__handleDecryptionKeyFailure)
+        self.registerMessageHandler(RunMobileCodeFailure, self.__handleMobileCodeFailure)
         self.registerMessageHandler(GeneralFailure, self.__handleFailure)
         self.registerMessageHandler(Heartbeat, self.__handleHeartbeat)
         
@@ -210,6 +211,13 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     
     def __handleDecryptionKeyFailure(self, prot, msg):
         packetTrace(logger, msg, "Decryption key failed. State: %s Cookie = %d/%d" % (self.__mode,
+                                                                                 self.__connData["ClientNonce"],
+                                                                                 self.__connData["ServerNonce"]))
+        msgObj = msg.data()
+        return self.__error(msgObj.ErrorMessage)
+    
+    def __handleMobileCodeFailure(self, prot, msg):
+        packetTrace(logger, msg, "Mobile Code Failed. State: %s Cookie = %d/%d" % (self.__mode,
                                                                                  self.__connData["ClientNonce"],
                                                                                  self.__connData["ServerNonce"]))
         msgObj = msg.data()
@@ -498,7 +506,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             #print "Sending to peer", peerString
             peer = playground.network.common.PlaygroundAddress.FromString(peerString)
             # hardcoded port for now
-            prot = self.__playground.openClientConnection(self, peer, 800, connectionType="RAW")
+            prot = self.__playground.connect(self, peer, 800, connectionType="RAW")
             prot = prot.getApplicationLayer()
             #prot.sendPythonCode(instruction, self)
             self.__openProts[peerString] = prot
@@ -671,7 +679,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         return True, ""
     
     def __startPurchase(self, addr, account, amount, memo, callback):
-        bankProtocolStack = self.__playground.openClientConnection(self.__bankFactory,
+        bankProtocolStack = self.__playground.connect(self.__bankFactory,
                                                               BANK_FIXED_PLAYGROUND_ADDR, 
                                                               BANK_FIXED_PLAYGROUND_PORT,
                                                               connectionType="RAW")

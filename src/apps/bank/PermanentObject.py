@@ -13,11 +13,13 @@ from Crypto.Cipher import AES
 
 from playground.crypto import X509Certificate, Pkcs7Padding
 
+import struct
+
 class PermanentObjectMixin(object):
     PERM_CERT_KEY = "__PERM__CERT_KEY__"
     PERM_PRIVATE_KEY_KEY = "__PERM__PRIVATE_KEY_KEY__"
     RESERVED_KEYS = [PERM_CERT_KEY, PERM_PRIVATE_KEY_KEY]
-    SIGNATURE_SIZE = 128
+    SIGNATURE_PACK = "<Q"
     AES_SIZE = 16
     
     @classmethod
@@ -43,7 +45,8 @@ class PermanentObjectMixin(object):
         encryptedData = encrypter.encrypt(paddedData)
         signer = PKCS1_v1_5.new(privateKey)
         signature = signer.sign(SHA.new(encryptedData))
-        fileContents = encryptedData + signature
+        fileContents = encryptedData + signature + struct.pack(cls.SIGNATURE_PACK,len(signature))
+
         with open(filename, "wb+") as f:
             f.write(fileContents)
             
@@ -51,7 +54,11 @@ class PermanentObjectMixin(object):
     def secureLoadState(cls, filename, cert, password):
         with open(filename, "rb") as f:
             contents = f.read()
-        encryptedData, signature = contents[:-cls.SIGNATURE_SIZE], contents[-cls.SIGNATURE_SIZE:]
+        packSize = struct.calcsize(cls.SIGNATURE_PACK)
+        body, signatureSizeStructString = contents[:-packSize], contents[-packSize:]
+        signatureSize = struct.unpack(cls.SIGNATURE_PACK, signatureSizeStructString)[0]
+        encryptedData, signature = body[:-signatureSize], body[-signatureSize:]
+
         publicKey = RSA.importKey(cert.getPublicKeyBlob())
         verifier = PKCS1_v1_5.new(publicKey)
         if not verifier.verify(SHA.new(encryptedData), signature):

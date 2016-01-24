@@ -4,6 +4,7 @@ Created on Dec 4, 2013
 @author: sethjn
 '''
 import playground
+from playground.network.common import Timer
 import sys
 
 def getRemotePiCodeString(nPoint):
@@ -36,7 +37,11 @@ class ComputePi(playground.network.client.sampleservers.MobileCodeClient.CodeCal
         self.mobileCodeClient = mobileCodeClient
         self.client = client
         self.protsToClose = []
-        
+    
+    def stop(self):
+        for prot in self.protsToClose:
+            prot.transport.loseConnection()
+        self.protsToClose = []
         
     def __reportResultsIfComplete(self):
         if self.successes + self.responses == self.mcount:
@@ -44,8 +49,7 @@ class ComputePi(playground.network.client.sampleservers.MobileCodeClient.CodeCal
             pi = (self.total/(self.n*1.0))*4  
             print "Pi estimated to be", pi
             print "Closing connection"
-            for prot in self.protsToClose:
-                prot.transport.loseConnection()
+            self.stop()
             print "All connections closed"
         
     def handleCodeResult(self, resultStr, resultObj):
@@ -73,7 +77,7 @@ class ComputePi(playground.network.client.sampleservers.MobileCodeClient.CodeCal
             print "Sending to peer", peerString
             peer = playground.network.common.PlaygroundAddress.FromString(peerString)
             # hardcoded port for now
-            prot = self.client.openClientConnection(self.mobileCodeClient, peer, 100)
+            srcPort, prot = self.client.connect(self.mobileCodeClient, peer, 100)
             prot.sendPythonCode(codeString, self)
             self.protsToClose.append(prot)
         
@@ -87,6 +91,46 @@ class ComputePi(playground.network.client.sampleservers.MobileCodeClient.CodeCal
         self.responses = 0
         self.total = 0
         self.startState()
+        
+### 
+# For use with PlaygroundNode.py on import
+####################################
+class PlaygroundNodeControl(object):
+    
+    def __init__(self):
+        self.serving = False
+        self.client = None
+    def start(self, clientBase, args):
+        self.clientBase = clientBase
+        result, msg = True, ""
+        if "start_server" in args:
+            mobileCodeServer = playground.network.client.sampleservers.ClientMobileCodeServer()
+            result = clientBase.listen(mobileCodeServer, 100)
+            if result == True:
+                self.serving = True
+            else: msg = "Could not start server"
+        if "start_client" in args:
+            print "start client"
+            computePi = ComputePi(clientBase, playground.network.client.sampleservers.MobileCodeClient())
+            Timer.callLater(0, lambda: computePi.start(10000000))
+            self.client = computePi
+        if not self.serving and not self.client:
+            result, msg = False, "computePi requires either 'start_server', 'start_client', or both"
+        return result, msg
+    
+    def stop(self):
+        if self.serving:
+            self.clientBase.close(100)
+        if self.client:
+            self.client.stop()
+        return True, ""
+control = PlaygroundNodeControl()
+
+Name = "compute_pi"
+start = control.start
+stop = control.stop
+########
+        
         
 if __name__ == "__main__":
     playgroundNode = int(sys.argv[3])
@@ -103,15 +147,15 @@ if __name__ == "__main__":
     
     if playgroundNode > 0:
         mobileCodeServer = playground.network.client.sampleservers.ClientMobileCodeServer()
-        client.installClientServer(mobileCodeServer, 100)
-        client.connectToPlaygroundServer(serverAddress, serverPort)
+        client.listen(mobileCodeServer, 100)
+        client.connectToChaperone(serverAddress, serverPort)
     else:
         #mobileCodeClient = playground.network.client.sampleservers.MobileCodeClient(myAddress, 101)
         computePi = ComputePi(client, playground.network.client.sampleservers.MobileCodeClient())
-        #client.installClientServer(mobileCodeClient, 101)
+        #client.listen(mobileCodeClient, 101)
         client.runWhenConnected(lambda: computePi.start(10000000))
         
         # the client also runs its own server
         mobileCodeServer = playground.network.client.sampleservers.ClientMobileCodeServer()
-        client.installClientServer(mobileCodeServer, 100)
-        client.connectToPlaygroundServer(serverAddress, serverPort)
+        client.listen(mobileCodeServer, 100)
+        client.connectToChaperone(serverAddress, serverPort)

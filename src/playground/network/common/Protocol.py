@@ -47,6 +47,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
     def connectionLost(self, reason=None):
         TwistedProtocol.connectionLost(self, reason)
         self.transport=None
+        self._factory = None
         self.disableMIBAddress()
         
     def changeTimerClass(self, timerClass=None, getTime=None):
@@ -69,6 +70,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         """
         Subclasses should NOT overwrite this method!
         """
+        logger.debug("%s received %d bytes" % (self, len(buf)))
         self._store.update(buf)
         message = self._store.popMessage(errorReporter=self)
         while message:

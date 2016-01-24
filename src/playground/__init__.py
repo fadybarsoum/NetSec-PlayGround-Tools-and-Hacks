@@ -17,3 +17,5 @@ sys.path = prependedImports + sys.path + appendedImports
 import playgroundlog
 import network as network
 import crypto
+
+blah = network

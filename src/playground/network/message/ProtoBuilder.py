@@ -271,6 +271,12 @@ class StructuredData(ProtoFieldValue):
             structOffset += self.__fields[fieldName].deserialize(buf, offset + structOffset)
         return structOffset
     
+    def __str__(self):
+        return "<%s(%s) %d" % (self.__defClass.PLAYGROUND_IDENTIFIER, self.__defClass.MESSAGE_VERSION, id(self))
+    
+    def __repr__(self):
+        return str(self)
+    
 class MessageDefinition(object):
     """
     This class should be the base class of all Message Definition

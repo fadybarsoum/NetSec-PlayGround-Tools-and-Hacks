@@ -42,7 +42,7 @@ class ClientToClientHandler(object):
         if len(serializedMessage) == 0: return
         
         for client in self.__connectionTable.get(playgroundDestAddressString, []):
-            client.transport.write(serializedMessage)
+            client.producerWrite(serializedMessage)
             
 class UnregisterClientHandler(object):
     def __init__(self, unregistrationCallback):

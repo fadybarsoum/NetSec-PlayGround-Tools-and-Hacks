@@ -202,11 +202,18 @@ class SecureItemStorage(PermanentObjectMixin):
         return decrypted
     
     def add(self, objects):
+        temp = {}
+        result = self.__addToTemp(objects, temp)
+        if result.succeeded():
+            self._commitAddRequired.update(temp)
+        return result
+        
+    def __addToTemp(self, objects, temp):
         for o in objects:
-            if self.getKey(o) in self.keys():
+            if self.has_key(self.getKey(o)):
                 return LedgerOperationFailure("Key %s already exists" % self.getKey(o))
             serializedObj = self.serialize(o)
-            self._commitAddRequired[self.getKey(o)] = self.secureSerializedObject(serializedObj, self.getKey(o), self.__password)
+            temp[self.getKey(o)] = self.secureSerializedObject(serializedObj, self.getKey(o), self.__password)
         return LedgerOperationSuccess()
     
     def commitAdd(self):
@@ -233,11 +240,20 @@ class SecureItemStorage(PermanentObjectMixin):
             temp = self.unsecureSerializedObject(temp, key, self.__password) 
         return temp
         
-    def remove(self, key):
-        if self._db.has_key(key):
-            self._commitRemoveRequired.add(key)
-            return LedgerOperationSuccess()
-        return LedgerOperationFailure("No such key %s" % key)
+    def remove(self, objects):
+        temp = set([])
+        result = self.__removeToTemp(objects, temp)
+        if result.succeeded():
+            self._commitRemoveRequired.update(temp)
+        return result
+    
+    def __removeToTemp(self, objects, temp):
+        for key in objects:
+            if self._db.has_key(key):
+                temp.add(key)
+            else:
+                return LedgerOperationFailure("No such key %s" % key)
+        return LedgerOperationSuccess()
     
 class BitPointVault(SecureItemStorage):
     @classmethod
@@ -320,22 +336,39 @@ class Ledger(PermanentObjectMixin):
     
     def getBalance(self, account):
         return self.__ledgerLine.getBalance(account)
+    
+    def __reconcileCirculation(self):
+        return self.__ledgerLine.getBalance("CIRCULATION") == (-len(self.__vault.keys()))
         
     def depositCash(self, account, bitPoints):
         if not account in self.__ledgerLine.accounts():
             return LedgerOperationFailure("No such account %s" % account)
+        if not self.__reconcileCirculation():
+            return LedgerOperationFailure("Already in a bad state. Circulation does not match deposits")
         #try:
-        if 1:
-            result = self.__vault.add(bitPoints)
-            self.__ledgerLine.setTransaction(time.asctime(), "vault deposit", ("CIRCULATION",account, len(bitPoints)))
-            commit = self.__vault.commitAdd()
-            if not commit.succeeded:
-                return commit
+        #if 1:
+        result = self.__vault.add(bitPoints)
+        if not result.succeeded():
+            return result
+        commit = self.__vault.commitAdd()
+        if not commit.succeeded:
+            return commit
         #except Exception, e:
         #    print "Exception", e
         #    return LedgerOperationFailure(str(e))
+        self.__ledgerLine.setTransaction(time.asctime(), "vault deposit", ("CIRCULATION",account, len(bitPoints)))
         self.__nextLedgerLine()
         self.__save()
+        if not self.__reconcileCirculation():
+            errMsgTemplate = "There was a mismatch. Circulation account is %d, bitpoints only total %d. Transaction reversed."
+            errMsg = errMsgTemplate % (self.__ledgerLine.getBalance("CIRCULATION"),len(self.__vault.keys()))
+            self.__ledgerLine.setTransaction(time.asctime(), "vault reverse", (account, "CIRCULATION", len(bitPoints)))
+            self.__nextLedgerLine()
+            self.__save()
+            # attempt to remove added bitpoints
+            result = self.__vault.remove(bitPoints)
+            if result.succeeded(): self.__vault.commitRemove()
+            return LedgerOperationFailure(errMsg)
         return LedgerOperationSuccess()
     
     def transfer(self, srcAccount, dstAccount, amount, memo=""):
@@ -397,7 +430,7 @@ class OnlineBank(object):
         
 """
 
-def main(args):
+def main(BankCoreModule, args):
     #sys.path.append("../..")
     from playground.crypto import X509Certificate
     from getpass import getpass
@@ -410,13 +443,13 @@ def main(args):
         with open(key) as f:
             key = RSA.importKey(f.read())
         passwd = getpass()
-        Ledger.InitializeDb(path, cert, key, passwd)
+        BankCoreModule.Ledger.InitializeDb(path, cert, key, passwd)
     elif args[0] == "vault_deposit":
         cert, path, bpFile = args[1:4]
         with open(cert) as f:
             cert = X509Certificate.loadPEM(f.read())
         passwd = getpass()
-        bank = Ledger(path, cert, passwd)
+        bank = BankCoreModule.Ledger(path, cert, passwd)
         with open(bpFile) as f:
             bpData = f.read()
         bps = []
@@ -425,14 +458,17 @@ def main(args):
             bpData = bpData[offset:]
             bps.append(newBitPoint)
         print "depositing", len(bps),"bit points"
-        bank.depositCash("VAULT",bps)
-        print "Vault balance", bank.getBalance("VAULT")
+        result = bank.depositCash("VAULT",bps)
+        if not result.succeeded():
+            print "Deposit failed",result.msg()
+        else:
+            print "Vault balance", bank.getBalance("VAULT")
     elif args[0] == "balances":
         cert, path = args[1:3]
         with open(cert) as f:
             cert = X509Certificate.loadPEM(f.read())
         passwd = getpass()
-        bank = Ledger(path, cert, passwd)
+        bank = BankCoreModule.Ledger(path, cert, passwd)
         for account in bank.getAccounts():
             print "%s balance"%account, bank.getBalance(account)
     elif args[0] == "create_account":
@@ -440,14 +476,14 @@ def main(args):
         with open(cert) as f:
             cert = X509Certificate.loadPEM(f.read())
         passwd = getpass()
-        bank = Ledger(path, cert, passwd)
+        bank = BankCoreModule.Ledger(path, cert, passwd)
         bank.createAccount(accountName)
     elif args[0] == "transfer":
         fromAccount, toAccount, amount, cert, path = args[1:6]
         with open(cert) as f:
             cert = X509Certificate.loadPEM(f.read())
         passwd = getpass()
-        bank = Ledger(path, cert, passwd)
+        bank = BankCoreModule.Ledger(path, cert, passwd)
         amount = int(amount)
         result = bank.transfer(fromAccount, toAccount, amount)
         if not result.succeeded():
@@ -459,10 +495,13 @@ def main(args):
         with open(cert) as f:
             cert = X509Certificate.loadPEM(f.read())
         passwd = getpass()
-        bank = Ledger(path, cert, passwd)
+        bank = BankCoreModule.Ledger(path, cert, passwd)
         for account in bank.getAccounts():
             if account == "VAULT": continue
             bank.transfer("VAULT", account, 100)
         
 if __name__ == "__main__":
-    main(sys.argv[1:])    
+    # import ourself. This is necessary for importing
+    # with pickle. Some day, figure out something better.
+    import apps.bank.BankCore
+    main(apps.bank.BankCore, sys.argv[1:])    

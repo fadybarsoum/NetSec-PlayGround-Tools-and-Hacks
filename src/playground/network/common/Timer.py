@@ -29,3 +29,4 @@ class ReactorOneshotTimer(ICancelableTimer):
             self.__reactorID.cancel()
             
 OneshotTimer = ReactorOneshotTimer
+callLater = lambda delay, f: reactor.callLater(delay, f)

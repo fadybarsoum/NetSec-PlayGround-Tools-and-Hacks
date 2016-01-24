@@ -8,6 +8,8 @@ import logging
 import inspect
 import sys
 
+from twisted.internet import reactor
+
 class ErrorHandler(object):
     '''
     Interface class for all error handling mechanisms. Any
@@ -29,7 +31,7 @@ class ErrorHandler(object):
     def handleError(self, message, reporter=None, stackHack=0):
         pass
     
-    def handleException(self, e, reporter=None, stackHack=0):
+    def handleException(self, e, reporter=None, stackHack=0, fatal=0):
         pass
     
 class LoggingErrorHandler(ErrorHandler):
@@ -38,7 +40,9 @@ class LoggingErrorHandler(ErrorHandler):
     When an error is logged (either as a message or an exception), it is 
     simply logged using the global python logger.
     
-    If the logger has no handlers, it raises the errors as exceptions.
+    If the logger has no handlers, error messages are simply dropped. Exceptions
+    are re-raised if there are no handlers or the exceptions are marked as 
+    fatal.
     """
     def __init__(self, logger):
         self.logger = logger
@@ -62,13 +66,19 @@ class LoggingErrorHandler(ErrorHandler):
         errMsg = "[Error at %s::%s::%d (obj id: %s)] %s" % (info.filename, info.function, info.lineno, objId, message)
         if self.__loggerReady():
             self.logger.error(errMsg)
-        else:
-            raise Exception("Logging Error Handler not ready, reporting error as exception:\n"+errMsg)
         
-    def handleException(self, e, reporter=None, stackHack=0):
+    def handleException(self, e, reporter=None, stackHack=0, fatal=False):
+        if fatal:
+            reactor.callLater(.1, reactor.stop)
         if self.__loggerReady():
+            try:
+                str(e).decode('ascii','strict')
+            except UnicodeDecodeError, u_e:
+                e = Exception("Could not report original error because it has encoding problems: %s" % str(str(e).decode("ascii","ignore")))
             if reporter: self.handleError("Exception: %s" % str(e), reporter=reporter, stackHack=(stackHack+1))
             self.logger.exception(e)
+            if fatal:
+                raise Exception, "Logging Error Handler received fatal exception, re-raising:\n%s"%e, sys.exc_info()[2]
         else:
             raise Exception, "Logging Error Handler not ready, re-raising exception:\n%s"%e, sys.exc_info()[2]
         
@@ -113,6 +123,6 @@ class ErrorHandlingMixin(object):
         reporter = explicitReporter and explicitReporter or self
         self.g_ErrorHandler.handleError(message, reporter=reporter, stackHack=stackHack)
         
-    def reportException(self, e, explicitReporter=None, stackHack=0):
+    def reportException(self, e, explicitReporter=None, stackHack=0, fatal=False):
         reporter = explicitReporter and explicitReporter or self
-        self.g_ErrorHandler.handleException(e, reporter=reporter, stackHack=0)
+        self.g_ErrorHandler.handleException(e, reporter=reporter, stackHack=stackHack, fatal=fatal)

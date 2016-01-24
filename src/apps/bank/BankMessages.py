@@ -5,7 +5,7 @@ Created on Apr 1, 2014
 '''
 
 from playground.network.message.ProtoBuilder import MessageDefinition
-from playground.network.message.StandardMessageSpecifiers import INT8, UINT8, STRING, OPTIONAL
+from playground.network.message.StandardMessageSpecifiers import INT8, UINT8, STRING, LIST, OPTIONAL
 
 class OpenSession(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.bank.OpenSession"
@@ -44,6 +44,26 @@ class BalanceResponse(MessageDefinition):
             ("Balance",INT8)
             ]
     
+class AdminBalanceRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.bank.AdminBalanceRequest"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8)
+            ]
+    
+class AdminBalanceResponse(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.bank.AdminBalanceResponse"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("Accounts",LIST(STRING)),
+            ("Balances",LIST(INT8))
+            ]
+    
 class TransferRequest(MessageDefinition):
     PLAYGROUND_IDENTIFIER= "apps.bank.TransferRequest"
     MESSAGE_VERSION="1.0"
@@ -54,6 +74,59 @@ class TransferRequest(MessageDefinition):
             ("DstAccount",STRING),
             ("Amount",UINT8),
             ("Memo",STRING)
+            ]
+    
+class VaultDepositRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.VaultDepositRequest"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("bpData",STRING)
+            ]
+    
+class VaultDepositReceipt(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.VaultDepositReceipt"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("Balance",UINT8)
+            ]
+    
+class CreateAccountRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.CreateAccountRequest"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("loginName",STRING),
+            ("AccountName", STRING),
+            ("pwHash",STRING)
+            ]
+
+class ChangePasswordRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.ChangePasswordRequest"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("loginName", STRING),
+            ("oldPwHash", STRING),
+            ("newPwHash", STRING)
+            ]
+    
+class RequestSucceeded(MessageDefinition):
+    PLAYGROUND_IDENTIFIER = "apps.bank.RequestSucceeded"
+    MESSAGE_VERSION = "1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
             ]
     
 class Receipt(MessageDefinition):

@@ -43,7 +43,7 @@ class Hijacker(ClientApplicationServer):
         def connectionMade(self):
             
             """ Connect to the Hijacker's own address in order to send a message to the real recipient """
-            self.connectToSelf = self.hijacker.clientBase.openClientConnection(MobileCodeClient(), 
+            self.connectToSelf = self.hijacker.clientBase.connect(MobileCodeClient(), 
                                                                                self.hijacker.clientBase.getAddress(), 
                                                                                100)
             
@@ -82,8 +82,8 @@ def simpleMain(args):
     serverAddress, serverPortString = args[1:3]
     serverPort = int(serverPortString)
     hijacker = Hijacker(client)
-    client.installClientServer(hijacker, 100)
-    client.connectToPlaygroundServer(serverAddress, serverPort)
+    client.listen(hijacker, 100)
+    client.connectToChaperone(serverAddress, serverPort)
     
 if __name__ == "__main__":
     import logging, sys

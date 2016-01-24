@@ -173,14 +173,17 @@ def main(args):
             cert = X509Certificate.loadPEM(f.read())
         with open(key) as f:
             key = RSA.importKey(f.read())
-        passwd = getpass.getpass()
+        passwd = getpass.getpass("Create mint password: ")
+        passwd2 = getpass.getpass("Re-enter mint password: ")
+        if passwd != passwd2:
+            sys.exit("Passwords do not match")
         PrintingPress.CreateBankVault(filename, cert, key, passwd)
     elif args[0] == "mint":
         amount, cert, filename = args[1:4]
         with open(cert) as f:
             cert = X509Certificate.loadPEM(f.read())
         amount = int(amount)
-        passwd = getpass.getpass()
+        passwd = getpass.getpass("Mint password: ")
         mint = PrintingPress(cert, passwd, filename)
         mint.mintBitPoints(amount, serializer)
         

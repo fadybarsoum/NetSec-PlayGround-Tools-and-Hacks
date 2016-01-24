@@ -10,6 +10,10 @@ from Protocol import Protocol
 from Error import DuplicateClientMessageHandler
 from playground.network.common import Error as NetworkError
 
+from playground.playgroundlog import packetTrace
+import logging
+logger = logging.getLogger(__name__)
+
 
 class MessageHandlerInterface(object):
     """
@@ -111,7 +115,10 @@ class SimpleMessageHandler(MessageHandlerInterface):
                 
         if not handler:
             return False
-        handler(protocol, msg)
+        try:
+            handler(protocol, msg)
+        except Exception, e:
+            protocol.reportException(e)
         return True
         
 class SimpleMessageHandlingProtocol(Protocol, SimpleMessageHandler):
@@ -126,6 +133,7 @@ class SimpleMessageHandlingProtocol(Protocol, SimpleMessageHandler):
         SimpleMessageHandler.__init__(self)
         
     def messageReceived(self, msg):
+        logger.debug("Message received for protocol %s" % self)
         try:
             success = self.handleMessage(self, msg)
             if not success:
