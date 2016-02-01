@@ -338,7 +338,7 @@ class PlaygroundNodeCLI(basic.LineReceiver, ErrorHandler):
             self.__backlog.append(commandline)
             return
         commandParts = commandline.split(' ')
-        command, args = commandParts[0], commandParts[1:]
+        command, args = commandParts[0], [arg for arg in commandParts[1:] if arg]
         commandHandler, argHandler = self.__commandHandler.get(command,(None, None))
         if commandHandler == None:
             self.transport.write("Unknown command [%s]\n" % command)

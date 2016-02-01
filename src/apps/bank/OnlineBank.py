@@ -17,7 +17,6 @@ from Exchange import BitPoint
 from playground.playgroundlog import logging, LoggingContext
 from playground.config import LoadOptions
 from playground.error import ErrorHandler
-from computePi import PlaygroundNodeControl
 logger = logging.getLogger(__file__)
 
 from BankCore import Ledger, LedgerLine
