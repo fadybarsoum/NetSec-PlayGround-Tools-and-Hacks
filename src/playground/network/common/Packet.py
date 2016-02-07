@@ -48,6 +48,7 @@ class Packet(ErrorHandlingMixin):
     BUFFER_STATUS_BAD_FRAMING = "Trailer not found for frame"
     
     BUFFER_STATUS_ERRORS = [
+                            BUFFER_STATUS_NO_MAGIC_PREFIX,
                             BUFFER_STATUS_BAD_CHECKSUM,
                             BUFFER_STATUS_BAD_FRAMING,
                             ]
@@ -109,7 +110,7 @@ class Packet(ErrorHandlingMixin):
         bufLen = len(buf) - offset
         if bufLen < Packet.HEADER_PREFIX_SIZE: 
             return (Packet.BUFFER_STATUS_NO_HEADER_YET, "Missing %d bytes for header" % (Packet.HEADER_PREFIX_SIZE - bufLen))
-        prefix, fullLen, framingSize, seed, crc32 = struct.unpack_from(Packet.HEADER_PREFIX_FORMAT, buf, offset)
+        prefix, packetLen, framingSize, seed, crc32 = struct.unpack_from(Packet.HEADER_PREFIX_FORMAT, buf, offset)
         if prefix != Packet.MAGIC_PREFIX:
             return (Packet.BUFFER_STATUS_NO_MAGIC_PREFIX, "Prefix is %d" % prefix)
         seedOffset = Packet.HEADER_PREFIX_SIZE + framingSize
@@ -117,15 +118,15 @@ class Packet(ErrorHandlingMixin):
             trailerSeed = struct.unpack_from(Packet.TRAILER_FORMAT, buf, seedOffset)
             if trailerSeed != seed:
                 return (Packet.BUFFER_STATUS_BAD_FRAMING, "Expected trailer missing")
-        if bufLen >= (fullLen + Packet.HEADER_PREFIX_SIZE):
+        if bufLen >= (packetLen + Packet.HEADER_PREFIX_SIZE):
             bufStart = offset+Packet.HEADER_PREFIX_SIZE
-            bufEnd = bufStart + bufLen
+            bufEnd = bufStart + packetLen
             fullPacket = buf[bufStart:bufEnd]
             computedChecksum = Packet.GetChecksum(fullPacket)
             if computedChecksum != crc32:
                 return (Packet.BUFFER_STATUS_BAD_CHECKSUM, "Checksum didn't match")
             return (Packet.BUFFER_STATUS_CONTAINS_MESSAGE, (fullPacket, bufEnd))
-        return (Packet.BUFFER_STATUS_INCOMPLETE, "Missing %d bytes for body" % ((fullLen + Packet.HEADER_PREFIX_SIZE) - bufLen))
+        return (Packet.BUFFER_STATUS_INCOMPLETE, "Missing %d bytes for body" % ((packetLen + Packet.HEADER_PREFIX_SIZE) - bufLen))
 
 class PacketStorage(object):
     """
@@ -158,6 +159,7 @@ class PacketStorage(object):
         
         if resultCode in [Packet.BUFFER_STATUS_INCOMPLETE,
                           Packet.BUFFER_STATUS_NO_HEADER_YET]:
+            logger.debug("Packet not ready. Cutting off %d bad bytes" % prefixOffset)
             self.storage = self.storage[prefixOffset:]
             return None
         
@@ -168,5 +170,5 @@ class PacketStorage(object):
         
         else:
             logger.debug("Unknown result code %s" % resultCode)
-            errorReporter.reportError("Unknown packet unpack result code %s" % resultCode)
+            #errorReporter.reportError("Unknown packet unpack result code %s" % resultCode)
         return None
