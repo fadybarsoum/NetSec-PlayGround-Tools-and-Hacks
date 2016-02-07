@@ -125,7 +125,7 @@ class MIBServerProtocol(SimpleMessageHandlingProtocol):
             resp["success"].setData(False)
             resp["responses"].add()
             resp["responses"][-1].setData("Authentication failed")
-            prot.transport.write(Packet.SerializeMessage(resp))
+            prot.transport.write(resp.serialize())
             return
         resp["success"].setData(True)
         mib = msgObj.MIB
@@ -142,7 +142,7 @@ class MIBServerProtocol(SimpleMessageHandlingProtocol):
             resp["responses"][-1].setData(r)
         if self.__authenticate:
             resp = self.__factory.SecureResponse(msg, resp)
-        prot.transport.write(Packet.SerializeMessage(resp))
+        prot.transport.write(resp.serialize())
         
 class MIBServerImpl(object):
     Protocol = MIBServerProtocol

@@ -35,7 +35,7 @@ class StackingTransportMixin(object):
         raise Exception("StackingTransport.write must be overwritten")
         
     def writeMessage(self, msg):
-        self.write(Packet.SerializeMessage(msg))
+        self.write(msg.serialize())
         
     def writeSequence(self, msgStrs):
         for msgStr in msgStrs: self.write(msgStr)
@@ -64,7 +64,6 @@ class ClientApplicationTransport(object):
     weird, non-python interface of ITransport
     '''
 
-
     def __init__(self, lowerTransport, addrPair, peerPair, closer, multiplexingProducer):
         #ITransport.__init__(self, addrPair, peerPair)
         '''
@@ -76,6 +75,7 @@ class ClientApplicationTransport(object):
         self.__addrPair = addrPair
         self.__peerPair = peerPair
         self.__maxMsgSize = (2**16)-1
+        self.__framingSize = (2**12)
         self.__closer = closer
         self.__multiplexingProducer = multiplexingProducer
         
@@ -101,6 +101,7 @@ class ClientApplicationTransport(object):
         toClientMsg["srcPort"].setData(self.__addrPair.port)
         msgID = random.getrandbits(64)
         toClientMsg["ID"].setData(msgID)
+            
         for msgIndex in range(len(msgStrFragments)):
             msgStrToSend = msgStrFragments[msgIndex]
             toClientMsg["clientPacket"].setData(msgStrToSend)
@@ -110,13 +111,15 @@ class ClientApplicationTransport(object):
             else: toClientMsg["lastPacket"].setData(False)
             
             packetTrace(logger, toClientMsg, "Sending c2c packet from %s to %s" % (toClientMsg["srcAddress"].data(),
+            
                                                                                    toClientMsg["dstAddress"].data()))
-            self.__transport.write(Packet.SerializeMessage(toClientMsg))
+            packetBytes = Packet.MsgToPacketBytes(toClientMsg)
+            self.__transport.write(packetBytes)
             self.__multiplexingProducer.signalRawWrite()
         
     def writeMessage(self, msg):
         packetTrace(logger, msg, "Transport received upper layer packet for transport")
-        self.write(Packet.SerializeMessage(msg))
+        self.write(msg.serialize())
         
     def writeSequence(self, msgStrs):
         for msgStr in msgStrs: self.write(msgStr)

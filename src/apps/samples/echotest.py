@@ -140,7 +140,7 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
         echoMessageBuilder["data"].setData(msg)
         
         # In this example, instead of calling transport.writeMessage, we serialize ourselves
-        self.transport.write(Packet.SerializeMessage(echoMessageBuilder))
+        self.transport.write(echoMessageBuilder.serialize())
         
 class EchoServer(ClientApplicationServer):
     Protocol=EchoServerProtocol

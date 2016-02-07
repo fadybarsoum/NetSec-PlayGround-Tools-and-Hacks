@@ -1,4 +1,4 @@
-from Packet import Packet
+from Packet import Packet, PacketStorage
 from PlaygroundAddress import PlaygroundAddress, PlaygroundAddressPair
 from Protocol import Protocol, StackingProtocolMixin, StackingFactoryMixin
 from MessageHandler import MessageHandlerInterface, SimpleMessageHandler, SimpleMessageHandlingProtocol

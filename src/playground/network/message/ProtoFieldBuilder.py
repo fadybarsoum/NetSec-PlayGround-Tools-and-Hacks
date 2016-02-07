@@ -149,7 +149,8 @@ class StringFieldValue(ProtoFieldValue):
         dataLen = struct.unpack_from("!"+self.LENGTH_CODE, buf, offset)[0]
         offset += struct.calcsize("!"+self.LENGTH_CODE)
         self._data = struct.unpack_from("!"+self.STRING_CODE%dataLen, buf, offset)[0]
-        return struct.calcsize(self.STRUCT_CODE%dataLen)
+        return struct.calcsize(self.STRUCT_CODE%dataLen)    
+        
 
 class ListFieldValue(ProtoFieldValue):
     """

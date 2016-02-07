@@ -82,7 +82,7 @@ class WrapMobileCodeResultTransport(object):
         self.__transport.writeMessage(response)
         
     def writeMessage(self, m):
-        self.write(playground.network.common.Packet.SerializeMessage(m))
+        self.write(m.serialize())
         
     def writeSequence(self, buffers):
         raise Exception("Only expected a single response to a single run mobile code packet")

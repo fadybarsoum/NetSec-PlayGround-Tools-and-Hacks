@@ -135,6 +135,9 @@ class StructuredData(ProtoFieldValue):
     It supports data(), which will return a simple struct with fields filled in.
     """
     
+    IDVersionTemplate = "!B%dsB%ds" # Length followed by length-string
+                                    # For message identifier and version
+    
     class POD:
         """
         Simple structure for data holding. the "data" operation of 
@@ -166,6 +169,28 @@ class StructuredData(ProtoFieldValue):
         
         builder.init()
         return builder
+    
+    @staticmethod
+    def Deserialize(buf):
+        offset = 0
+        nameLen = struct.unpack_from("!B", buf, offset)[0]
+        offset += struct.calcsize("!B")
+        name = struct.unpack_from("!%ds" % nameLen, buf, offset)[0]
+        offset += struct.calcsize("!%ds" % nameLen)
+        
+        versionLen = struct.unpack_from("!B", buf, offset)[0]
+        offset += struct.calcsize("!B")
+        version = struct.unpack_from("!%ds" % versionLen, buf, offset)[0]
+        offset += struct.calcsize("!%ds" % versionLen)
+        
+        versionMajorStr, versionMinorStr = version.split(".")
+        versionTuple = (int(versionMajorStr), int(versionMinorStr))
+        
+        msgHandler = StructuredData.GetMessageBuilder(name, versionTuple)
+        if not msgHandler: 
+            return (None, 0)
+        actualBytes = msgHandler.deserialize(buf, offset)
+        return (msgHandler, actualBytes)
     
     def __init__(self, defClass):
         ProtoFieldValue.__init__(self)
@@ -257,6 +282,12 @@ class StructuredData(ProtoFieldValue):
             buf += struct.pack('!H',self.__tagMapping[fieldName])
             buf += self.__fields[fieldName].serialize()
         buf = struct.pack("!H",fieldCount) + buf
+        if issubclass(self.__defClass, MessageDefinition):
+            msgID, version = (self.__defClass.PLAYGROUND_IDENTIFIER, self.__defClass.MESSAGE_VERSION)
+            packCode = StructuredData.IDVersionTemplate % (len(msgID), len(version))
+            msgHeader = struct.pack(packCode, len(msgID), msgID, 
+                                    len(version), version)
+            buf = msgHeader + buf
         return buf
     
     def deserialize(self, buf, offset=0):

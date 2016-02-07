@@ -29,7 +29,7 @@ class ClientToClientHandler(object):
         self.__additionalHandlers.remove(h)
         
     def __formatMessage(self, msg):
-        serializedMessage = Packet.SerializeMessage(msg)
+        serializedMessage = Packet.MsgToPacketBytes(msg)
         for handler in self.__additionalHandlers:
             serializedMessage = handler(serializedMessage, msg)
             if len(serializedMessage) == 0: break
@@ -62,7 +62,7 @@ class UnregisterClientHandler(object):
         unregisterClientMsg["address"].setData(playgroundAddressString)
         """ Packet created. """
         
-        packetBuffer = Packet.SerializeMessage(unregisterClientMsg)
+        packetBuffer = Packet.MsgToPacketBytes(unregisterClientMsg)
         protocol.transport.write(packetBuffer)
 
 class RegisterClientHandler(object):
@@ -91,7 +91,7 @@ class RegisterClientHandler(object):
         registerClientMsg["address"].setData(playgroundAddressString)
         """ Packet created. """
         
-        packetBuffer = Packet.SerializeMessage(registerClientMsg)
+        packetBuffer = Packet.MsgToPacketBytes(registerClientMsg)
         protocol.transport.write(packetBuffer)
         
 class GetPeersHandler(object):
@@ -106,5 +106,5 @@ class GetPeersHandler(object):
         peersMsg["peers"].add(len(addresses))
         for index in range(len(addresses)):
             peersMsg["peers"][index].setData(addresses[index])
-        packetBuffer = Packet.SerializeMessage(peersMsg)
+        packetBuffer = Packet.MsgToPacketBytes(peersMsg)
         protocol.transport.write(packetBuffer)

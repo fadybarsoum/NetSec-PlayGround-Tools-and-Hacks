@@ -189,7 +189,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         request["ID"].setData(codeID)
         request["pythonCode"].setData(codeString)
         request["mechanism"].setData("pickle")
-        serializedMsg = Packet.SerializeMessage(request)
+        serializedMsg = request.serialize()
         self.__runningCodeHash = SHA.new(serializedMsg).digest()
         wrapMsg = MessageData.GetMessageBuilder(SessionRunMobileCode)
         self.__setCookie(wrapMsg)

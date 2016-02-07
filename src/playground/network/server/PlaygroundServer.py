@@ -6,6 +6,7 @@ Created on Aug 20, 2013
 from playground.network.common import Protocol, SimpleMessageHandler, MIBServerProtocol
 from playground.network.common import MIBServerImpl, StandardMIBProtocolAuthenticationMixin
 from playground.network.common import Error as NetworkError
+from playground.network.common import PacketStorage
 from playground.network.message.definitions import playground
 from playground.error import ErrorHandlingMixin
 from playground.crypto import CertificateDatabase
@@ -66,6 +67,14 @@ class PlaygroundServerProtocol(MIBServerProtocol):
         self.server = server
         self.__addressData = {}
         self.__producer = BacklogProducer()
+        self.__packetStorage = PacketStorage()
+        
+    def dataReceived(self, buf):
+        self.__packetStorage.update(buf)
+        packet = self.__packetStorage.popPacket()
+        while packet != None:
+            MIBServerProtocol.dataReceived(self, packet)
+            packet = self.__packetStorage.popPacket()
         
     def messageReceived(self, message):
         """
@@ -203,7 +212,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
                 return ""
         
         if self.__errorRate[2] > 0:
-            messageArray = array.array('B', originalMessage["clientPacket"].data())
+            messageArray = array.array('B', serializedMessage)
             byteIndex = 0
             while byteIndex < len(messageArray):
                 # len(messageArray)-byteIndex is how many message bytes are left in this message
@@ -221,9 +230,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
                     self.__computeErrorBytes()
                 elif self.__byteCounter > self.__errorRate[2]:
                     raise Exception("Shouldn't happen")
-            originalMessage["clientPacket"].setData(messageArray.tostring())
-            serializedMessage = Packet.SerializeMessage(originalMessage)
-            
+            serializedMessage = messageArray.tostring()
         return serializedMessage
     
     

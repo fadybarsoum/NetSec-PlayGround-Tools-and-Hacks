@@ -6,7 +6,7 @@ Created on Oct 23, 2013
 
 from twisted.internet.protocol import Protocol as TwistedProtocol
 
-from Packet import PacketStorage
+from playground.network.message import MessageData
 from Timer import OneshotTimer
 from playground.error import ErrorHandlingMixin
 from MIBAddress import MIBAddressMixin
@@ -28,7 +28,6 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         Constructor
         '''
         # There is no "TwistedProtocol.__init__"
-        self._store = PacketStorage()
         self._factory = factory
         self._addr = addr
         # set defaults
@@ -71,12 +70,15 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         Subclasses should NOT overwrite this method!
         """
         logger.debug("%s received %d bytes" % (self, len(buf)))
-        self._store.update(buf)
-        message = self._store.popMessage(errorReporter=self)
-        while message:
-            packetTrace(logger, message, "Message received by protocol %s." % str(self.__class__))
-            self.messageReceived(message)
-            message = self._store.popMessage()
+        # attempt to deserialize
+        try:
+            msgBuilder, bytesConsumed = (MessageData.Deserialize(buf))
+        except Exception, e:
+            self.reportException(e)
+            return
+        if len(buf) != bytesConsumed:
+            self.reportError("Received extra bytes. Expected %d, but got %d" % (bytesConsumed, len(buf)))
+        self.messageReceived(msgBuilder)
             
     def messageReceived(self, msg):
         raise Exception("Must be implemented by subclasses")

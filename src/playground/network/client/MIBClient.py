@@ -75,9 +75,9 @@ class SimpleMIBClientProtocol(SimpleMessageHandlingProtocol):
         
         # Transport not guaranteed to have writeMessage...
         if self.transport:
-            self.transport.write(Packet.SerializeMessage(req))
+            self.transport.write(req.serialize())
         else:
-            self.__waitForConnection.append(lambda: self.transport.write(Packet.SerializeMessage(req)))
+            self.__waitForConnection.append(lambda: self.transport.write(req.serialize()))
         if timeout:
             self.callLater(timeout, lambda: self.clearPendingRequest(req["ID"].data()))
         return mibRequestId

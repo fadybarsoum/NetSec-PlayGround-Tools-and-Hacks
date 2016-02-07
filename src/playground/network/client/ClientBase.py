@@ -11,6 +11,7 @@ from playground.network.common import SimpleMessageHandler, Protocol, StackingPr
 from playground.network.common import MIBAddressMixin
 from playground.network.common import Error as NetworkError
 from playground.network.common import Timer
+from playground.network.common import Packet, PacketStorage
 
 from playground.crypto import CertificateDatabase
 
@@ -398,7 +399,7 @@ class ClientBase(Factory, SimpleMessageHandler, MIBAddressMixin, ErrorHandlingMi
         self.__peerCallbacks.append(callback)
         
         packetTrace(logger, getPeersMsg, "Sending to playground server")
-        self.__protocol.transport.write(Packet.SerializeMessage(getPeersMsg))
+        self.__protocol.transport.write(Packet.MsgToPacketBytes(getPeersMsg))
         
     def __checkMibProtocolFreshness(self, addr):
         if not self.__mibProtocols.has_key(addr):
@@ -523,6 +524,7 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
         self.__connectionMade  = connectionMadeCallback
         self.__connectionLost = connectionLostCallback
         self.__transportProducer = ClientTransportMultiplexingProducer()
+        self.__packetStorage = PacketStorage()
         
     def multiplexingProducer(self): return self.__transportProducer
         
@@ -537,12 +539,19 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
         if registerClientMsg == None:
             raise Exception("Cannot find RegisterClient definition")
         registerClientMsg["address"].setData(self.__addr.toString())
-        packetBuffer = Packet.SerializeMessage(registerClientMsg)
+        packetBytes = Packet.MsgToPacketBytes(registerClientMsg)
         self.transport.registerProducer(self.__transportProducer, True)
         self.__connectionMade()
         
         packetTrace(logger, registerClientMsg, "Sending registration to playground server")
-        self.transport.write(packetBuffer)
+        self.transport.write(packetBytes)
+            
+    def dataReceived(self, buf):
+        self.__packetStorage.update(buf)
+        packet = self.__packetStorage.popPacket()
+        while packet != None:
+            SimpleMIBClientProtocol.dataReceived(self, packet)
+            packet = self.__packetStorage.popPacket()
         
     def messageReceived(self, msg):
         packetTrace(logger, msg, "Msg received by client base protocol. Passing to handler")
