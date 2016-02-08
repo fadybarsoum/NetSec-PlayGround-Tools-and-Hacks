@@ -189,7 +189,7 @@ class StructuredData(ProtoFieldValue):
         msgHandler = StructuredData.GetMessageBuilder(name, versionTuple)
         if not msgHandler: 
             return (None, 0)
-        actualBytes = msgHandler.deserialize(buf, offset)
+        actualBytes = msgHandler.deserialize(buf, offset)+offset
         return (msgHandler, actualBytes)
     
     def __init__(self, defClass):
