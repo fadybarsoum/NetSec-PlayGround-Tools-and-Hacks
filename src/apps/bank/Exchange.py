@@ -54,6 +54,18 @@ class BitPoint(object):
         
         return (bp, offset)
     
+    @classmethod
+    def deserializeAll(cls, f):
+        bpData = f.read(2048)
+        bps=[]
+        while bpData:
+            newBitPoint, offset = BitPoint.deserialize(bpData)
+            bpData = bpData[offset:]
+            if len(bpData) < 1024:
+                bpData += f.read(2048)
+            bps.append(newBitPoint)
+        return bps
+    
     def __init__(self):
         self.__issuer = None
         self.__serialNumber = None
@@ -66,6 +78,7 @@ class BitPoint(object):
     def timestamp(self): return self.__timestamp
     
     def serialize(self): return self.__mainData + self.__signatureData
+    def serializeInto(self, f): f.write(self.serialize())
     def mainDataBlob(self): return self.__mainData
     def signatureBlob(self): return self.__signature
         

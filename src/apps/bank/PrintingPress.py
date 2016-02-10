@@ -26,15 +26,22 @@ class BitPointVerifier(object):
     HASH_ALGO = SHA
     
     def __init__(self, authorityCert):
-        publicKey = RSA.new(authorityCert.getPublicKeyBlob())
+        self.__issuer = authorityCert.getSubject()["commonName"]
+        publicKey = RSA.importKey(authorityCert.getPublicKeyBlob())
         self.__verifier = self.SIG_ALGO.new(publicKey)
         
     def verify(self, bp):
-        return self.__verifier.verify(self.HASH_ALGO.new(bp.mainDatablob()), bp.signatureBlob())
+        sigVerified = self.__verifier.verify(self.HASH_ALGO.new(bp.mainDataBlob()), bp.signatureBlob())
+        if not sigVerified:
+            return (False,"Invalid signature")
+        if bp.issuer() != self.__issuer:
+            return (False, "Invalid issuer %s (expected %s)" % (bp.issuer(),
+                                                                self.__issuer))
+        return (True,"Validated Correctly")
 
 class PrintingPress(PermanentObjectMixin):
     INSTANCE = None
-    ISSUER = "PLAYGROUND PROJECT ROOT BANK - Q1 2014"
+    #ISSUER = "PLAYGROUND PROJECT ROOT BANK - Q1 2014"
     
     SERIES_RANGE = 9999999999
     
@@ -75,6 +82,7 @@ class PrintingPress(PermanentObjectMixin):
             raise Exception("Duplicate Printing Press")
         PrintingPress.INSTANCE = self
         self.__cert = certificate
+        self.ISSUER = self.__cert.getSubject()["commonName"]
         self.__password = password
         self.__stateFileName = bankStateVaultFileName
         self.__loadState()
@@ -186,6 +194,41 @@ def main(args):
         passwd = getpass.getpass("Mint password: ")
         mint = PrintingPress(cert, passwd, filename)
         mint.mintBitPoints(amount, serializer)
+    elif args[0] == "info":
+        filename = args[1]
+        if len(args) > 2:
+            sampleSize = args[2]
+        else:
+            sampleSize = None
+        bitpoints = []
+        with open(filename,"rb") as f:
+            bitpoints = BitPoint.deserializeAll(f)
+        print "Deserialized",len(bitpoints),"bitpoints"
+        if sampleSize == None:
+            sample = []
+        elif sampleSize.lower() == "all":
+            sample = bitpoints
+        else:
+            start,stop = sampleSize.split(":")
+            start = int(start.strip())
+            stop = int(stop.strip())
+            sample = bitpoints[start:stop]
+        for bp in sample:
+            print bp
+    elif args[0] == "validate":
+        filename, issuingCert = args[1:3]
+        bitpoints = []
+        with open(filename,"rb") as f:
+            bitpoints = BitPoint.deserializeAll(f)
+        with open(issuingCert) as f:
+            cert = X509Certificate.loadPEM(f.read())
+        verifier = BitPointVerifier(cert)
+        for bp in bitpoints:
+            isValid, reason = verifier.verify(bp)
+            if isValid:
+                print bp.serialNumber(),"is valid"
+            else:
+                print bp.serialNumber(),"is NOT valid:", reason
         
 if __name__ == "__main__":
     main(sys.argv[1:])
