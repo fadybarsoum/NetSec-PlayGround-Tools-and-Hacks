@@ -129,23 +129,23 @@ class Packet(ErrorHandlingMixin):
             return (Packet.BUFFER_STATUS_NO_MAGIC_PREFIX, "Prefix is %d" % prefix)
         
         rebuildOffset = Packet.HEADER_PREFIX_SIZE + offset
+        maxPacketOffset = Packet.HEADER_PREFIX_SIZE + offset + packetLen
         frames = []
-        while (rebuildOffset+framingSize) < len(buf):
-            seedOffset = rebuildOffset + framingSize
+        frameOffset = 0 
+        while (frameOffset+framingSize) < maxPacketOffset:
+            seedOffset = frameOffset + framingSize
             trailerSeed = struct.unpack_from(Packet.TRAILER_FORMAT, buf, seedOffset)[0]
             if trailerSeed != seed:
                 return (Packet.BUFFER_STATUS_BAD_FRAMING, "Expected trailer missing")
-            frames.append(buf[rebuildOffset:seedOffset])
-            rebuildOffset += framingSize + Packet.TRAILER_SIZE
-        frames.append(buf[rebuildOffset:])
+            frames.append(buf[frameOffset:seedOffset])
+            frameOffset += framingSize + Packet.TRAILER_SIZE
+        frames.append(buf[rebuildOffset:maxPacketOffset])
         if bufLen >= (packetLen + Packet.HEADER_PREFIX_SIZE):
-            bufStart = offset+Packet.HEADER_PREFIX_SIZE
-            bufEnd = bufStart + packetLen
             fullPacket = "".join(frames)
             computedChecksum = Packet.GetChecksum(fullPacket)
             if computedChecksum != crc32:
                 return (Packet.BUFFER_STATUS_BAD_CHECKSUM, "Checksum didn't match")
-            return (Packet.BUFFER_STATUS_CONTAINS_MESSAGE, (fullPacket, bufEnd))
+            return (Packet.BUFFER_STATUS_CONTAINS_MESSAGE, (fullPacket, maxPacketOffset))
         return (Packet.BUFFER_STATUS_INCOMPLETE, "Missing %d bytes for body" % ((packetLen + Packet.HEADER_PREFIX_SIZE) - bufLen))
 
 class PacketStorage(object):
