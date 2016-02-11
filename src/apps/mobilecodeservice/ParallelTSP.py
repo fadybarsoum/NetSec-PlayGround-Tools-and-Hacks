@@ -91,26 +91,6 @@ import random, pickle, playground
 import __builtin__
 import io
 
-safe_builtins = {
-    'list',
-    'Exception',
-    'int'
-}
-
-class RestrictedUnpickler(pickle.Unpickler):
-
-    def find_class(self, module, name):
-        # Only allow safe classes from builtins.
-        if True: #(module == "exceptions" and name == "Exception") or (module == "__builtin__" and name in safe_builtins):
-            return getattr(__builtin__, name)
-        # Forbid everything else.
-        raise pickle.UnpicklingError("global '%s.%s' is forbidden" %
-                                     (module, name))
-
-def restricted_loads(s):
-    """Helper function analogous to pickle.loads()."""
-    return RestrictedUnpickler(io.BytesIO(s)).load()
-
 def generateDistanceMatrix(n, min=1, max=9):
     matrix = []
     for i in range(n):
@@ -251,84 +231,7 @@ class ParallelTSP(MIBAddressMixin):
             return False, "No such ID"
         addr = self.__parallelCodes[id][1]
         logger.info("Now verifying result pickle from %s" % (str(addr),))
-        """sandboxDir = "__ext_verify__tmp"
-        if not os.path.exists(sandboxDir):
-            os.mkdir(sandboxDir)
-        if not os.path.exists(sandboxDir):
-            logger.error("Could not create sandbox directory %s for pickle safety check" % (sandboxDir,))
-            return False, "Could not create tmp dir for code execution"
-        ptspDir = os.path.dirname(__file__)
-        originalPTSP = os.path.join(ptspDir, "PTSPVerify.py")
-        copiedPTSP = os.path.join(sandboxDir, "PTSPVerify.py")
-        if not os.path.exists(originalPTSP):
-            logger.error("PTSPVerify file missing.")
-            return False, "Original PTSP does not exist"
-        shutil.copy2(originalPTSP, copiedPTSP)
-        execFileCmd = "/tmp/PTSPVerify.py"
-        if install_mode == "personal":
-            cmd = "%s --tmp=%s %s %s" % (self.SANDBOX_CMD, sandboxDir, PYPY_SANDBOXED, execFileCmd)
-        elif install_mode == "py_vm":
-            cmd = "%s --tmp=%s %s" % (self.SANDBOX_CMD, sandboxDir, execFileCmd)
-        else:
-            return False, "Unknown internal pypy mode"
-
-        with open(os.path.join(sandboxDir, "__ext_verify__.txt"), "w+") as f:
-            f.write(pickledResult)
-        cmd += " __ext_verify__.txt " + (success and "1" or "0")
-        iresult = 0
-        logger.info("Executing pypy command to check pickle result from %s: %s" % (str(addr), cmd))
-        try:
-            output = subprocess.check_output([cmd], shell=True, stderr=subprocess.STDOUT)
-        except subprocess.CalledProcessError, e:
-            iresult = e.returncode
-        if iresult != 0:
-            logger.error("Could not check the result of the pickle from %s. Reason: %s" % (str(addr), str(e)))
-            return False, "Could not check pickle results"
-        logger.info("Output from verification of pickle from %s:\n%s" % (str(addr), output))
-        lines = output.split("\n")
-        result = None
-        msg = "No return message"
-        pickledStr = None
-        for line in lines:
-            if pickledStr != None: # This means we've started loading the picked obj
-                pickledStr += line + "\n"
-            elif line.startswith("__VERIFY_RETURN_CODE__:"):
-                try:
-                    codeStr = line.split(":")[1].strip()
-                    result = int(codeStr)
-                except:
-                    pass
-            elif line.startswith("__VERIFY_MSG__:"):
-                try:
-                    msg = line.split(":")[1].strip()
-                except:
-                    logger.error("Output from verification of pickle from %s was corrupted." % (str(addr),))
-                    msg = "Result message corrupted"
-            elif line == "__VERIFY_PICKLED_OBJ__":
-                pickledStr = ""
-        if result == None:
-            return False, "Could not get result from safe pickle execution"
-        elif result == VERIFY_PICKLE_LOAD_FAILURE:
-            return False, "Could not unpickle result: " + msg
-        elif result == NOT_DIST_PATH_TUPLE_FAILURE:
-            return False, "Not a distance,path tuple: " + msg
-        elif result == DIST_NOT_AN_INT:
-            return False, "Distance was not an int: " + msg
-        elif result == PATH_NOT_A_LIST:
-            return False, "Path was not a list: " + msg
-        elif result == ERROR_NOT_AN_EXCEPTION:
-            return False, "Exception was not an exception: " + msg
-        elif result == EVIL_DETECTED:
-            # Save the original pickle to disk
-            evilFile = "evil."+str(addr)+"."+str(time.time())+".txt"
-            logger.info("Detected possible attack from %s. Saving original pickle to %s" % (str(addr),
-                                                                                            os.path.abspath(evilFile)))
-            with open(evilFile, "w") as f:
-                f.write(pickledResult)
-            return False, "==DETECTION-OF-POSSIBLE-ATTACK==: " + msg
-        elif result != 0:
-            return False, "General error: " + msg"""
-        resultObj = restricted_loads(pickledResult) # pickledStr
+        resultObj = pickle.loads(pickledResult) # pickledStr
         if success:
             return self.codeCallback(id, resultObj)
         else:

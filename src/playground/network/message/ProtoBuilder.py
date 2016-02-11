@@ -248,15 +248,20 @@ class StructuredData(ProtoFieldValue):
             self.__assignTag(fieldName)
             self.__fieldOrder.append(fieldName)
             
+    def isMessageDefinition(self):
+        return issubclass(self.__defClass, MessageDefinition)
+            
     def topLevelData(self):
-        if issubclass(self.__defClass, MessageDefinition):
+        if self.isMessageDefinition():
             return (self.__defClass.PLAYGROUND_IDENTIFIER, self.__defClass.MESSAGE_VERSION)
         return (None, None)
             
     def data(self):
         if self._data != self.UNSET:
             for fieldName in self.__fields.keys():
-                setattr(self._data, fieldName, self.__fields[fieldName].data())
+                fieldData = self.__fields[fieldName].data()
+                if fieldData != self.UNSET:
+                    setattr(self._data, fieldName, self.__fields[fieldName].data())
         return self._data
             
     def __getitem__(self, key):
@@ -273,6 +278,10 @@ class StructuredData(ProtoFieldValue):
         return Validated()
     
     def serialize(self):
+        if self.isMessageDefinition():
+            messageValid = self.validate()
+            if not messageValid:
+                raise messageValid
         buf = ""
         fieldCount = 0
         for fieldName in self.__fieldOrder:

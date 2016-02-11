@@ -103,6 +103,7 @@ class ErrorHandlingMixin(object):
     should chain to the global handler.
     """
     g_ErrorHandler = LoggingErrorHandler(logging.getLogger(""))
+    l_ErrorHandler = g_ErrorHandler
     
     @staticmethod
     def SetGlobalErrorHandler(handler):
@@ -115,14 +116,14 @@ class ErrorHandlingMixin(object):
         handler.
         """
         if handler:
-            self.g_ErrorHandler = handler
+            self.l_ErrorHandler = handler
         else:
-            self.g_ErrorHandler = ErrorHandlingMixin.g_ErrorHandler
+            self.l_ErrorHandler = self.g_ErrorHandler
         
     def reportError(self, message, explicitReporter=None, stackHack=0):
         reporter = explicitReporter and explicitReporter or self
-        self.g_ErrorHandler.handleError(message, reporter=reporter, stackHack=stackHack)
+        self.l_ErrorHandler.handleError(message, reporter=reporter, stackHack=stackHack)
         
     def reportException(self, e, explicitReporter=None, stackHack=0, fatal=False):
         reporter = explicitReporter and explicitReporter or self
-        self.g_ErrorHandler.handleException(e, reporter=reporter, stackHack=stackHack, fatal=fatal)
+        self.l_ErrorHandler.handleException(e, reporter=reporter, stackHack=stackHack, fatal=fatal)

@@ -74,7 +74,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         try:
             msgBuilder, bytesConsumed = (MessageData.Deserialize(buf))
         except Exception, e:
-            self.reportException(e)
+            self.reportException(e, explicitReporter=Protocol.dataReceived)
             return
         if len(buf) != bytesConsumed:
             self.reportError("Received extra bytes. Expected %d, but got %d" % (bytesConsumed, len(buf)))

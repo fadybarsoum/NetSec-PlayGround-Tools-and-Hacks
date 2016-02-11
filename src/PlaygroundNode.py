@@ -80,18 +80,19 @@ class StandaloneTask(object):
             print result    
 
 class PlaygroundNode(object):
-    def __init__(self, addr, chaperoneIp, chaperoneTcpPort, doLogging=True):
+    def __init__(self, addr, chaperoneIp, chaperoneTcpPort, doLogging=True, standAlone=False):
         self.nodeAddress = addr
         self.chaperoneAddress = (chaperoneIp, chaperoneTcpPort)
         
         if doLogging:
             self.logctx = playground.playgroundlog.LoggingContext()
             self.logctx.nodeId = addr.toString()
-            self.logctx.doPacketTracing = True
+            self.logctx.doPacketTracing = False
             playground.playgroundlog.startLogging(self.logctx)
             
         self.clientBase = playground.network.client.ClientBase(self.nodeAddress)
         self.runningScripts = {}
+        self.standAlone = standAlone
         
     def isLive(self, scriptName):
         return self.runningScripts.has_key(scriptName)
@@ -155,6 +156,8 @@ class PlaygroundNode(object):
             errMsg = traceback.format_exc()
             result, msg = False, "Could not stop script normally (will be forced close). Reason: %s" % errMsg
         self.forceUnloadScript(scriptName)
+        if self.standAlone:
+            self.shutdown()
         return (result, msg)
     
     def shutdown(self):

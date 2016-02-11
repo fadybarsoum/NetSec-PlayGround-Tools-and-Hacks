@@ -118,7 +118,7 @@ class SimpleMessageHandler(MessageHandlerInterface):
         try:
             handler(protocol, msg)
         except Exception, e:
-            protocol.reportException(e)
+            protocol.reportException(e, explicitReporter=handler)
         return True
         
 class SimpleMessageHandlingProtocol(Protocol, SimpleMessageHandler):
@@ -139,7 +139,7 @@ class SimpleMessageHandlingProtocol(Protocol, SimpleMessageHandler):
             if not success:
                 self.reportException(NetworkError.NoSuchMessageHandler(msg))
         except Exception, e:
-            self.reportException(e)
+            self.reportException(e, explicitReporter=SimpleMessageHandlingProtocol)
             try:
                 self.transport.loseConnection()
             except:

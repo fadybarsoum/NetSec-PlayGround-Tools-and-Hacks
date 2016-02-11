@@ -8,7 +8,7 @@ import sqlite3, os, pickle, sys, time, dbm
 from CipherUtil import EncryptThenHmac, EncryptThenRsaSign, SHA, DefaultSign, X509Certificate, RSA
 from PermanentObject import PermanentObjectMixin
 from collections import OrderedDict
-
+from PrintingPress import BitPointVerifier
 
 
 class LedgerLine(object):
@@ -297,6 +297,8 @@ class Ledger(PermanentObjectMixin):
         self.__cert = cert
         self.__password = password
         self.__load()
+        self.__mintCerts = {}
+        self.__bpVerifiers = {}
         
     def __nextLedgerLine(self):
         old = self.__ledgerLine
@@ -339,6 +341,41 @@ class Ledger(PermanentObjectMixin):
     
     def __reconcileCirculation(self):
         return self.__ledgerLine.getBalance("CIRCULATION") == (-len(self.__vault.keys()))
+    
+    def registerMintCert(self, cert):
+        try:
+            with open(cert) as f:
+                certObj = X509Certificate.loadPEM(f.read())
+                self.__mintCerts[certObj.getSubject()["commonName"]] = certObj
+                self.__bpVerifiers[certObj.getSubject()["commonName"]] = BitPointVerifier(certObj)
+        except Exception, e:
+            return LedgerOperationFailure("Could not register cert for mint: %s" % str(e))
+        return LedgerOperationSuccess()
+    
+    def withdrawCash(self, account, amount):
+        if not account in self.__ledgerLine.accounts():
+            return LedgerOperationFailure("No such account %s" % account)
+        if not self.__reconcileCirculation():
+            return LedgerOperationFailure("Already in a bad state. Circulation does not match deposits")
+        if not type(amount) == int or amount < 0:
+            return LedgerOperationFailure("Amount must be a positive integer.")
+        bitpointKeys = self.__vault.keys()[:amount]
+        if len(bitpointKeys) < amount:
+            return LedgerOperationFailure("Not enough Bitpoints in the vault for withdrawl")
+        bitpoints = []
+        for bitpointKey in self.__vault.keys():
+            bitpoints.append(self.__vault.get(bitpointKey))
+        result = self.__vault.remove(bitpoints)
+        if not result.succeeded():
+            return result
+        self.__ledgerLine.setTransaction(time.asctime(), "cash withdrawl", ("CIRCULATION",account, amount))
+        self.__nextLedgerLine()
+        self.__save()
+        commit = self.__vault.commitAdd()
+        if not commit.succeeded:
+            return commit
+        # We need to reconcile circulation here...
+        return LedgerOperationSuccess(value=bitpoints)
         
     def depositCash(self, account, bitPoints):
         if not account in self.__ledgerLine.accounts():
@@ -347,6 +384,12 @@ class Ledger(PermanentObjectMixin):
             return LedgerOperationFailure("Already in a bad state. Circulation does not match deposits")
         #try:
         #if 1:
+        for bitPoint in bitPoints:
+            if not self.__bpVerifiers.has_key(bitPoint.issuer()):
+                return LedgerOperationFailure("Cannot verify bitpoint. Unknown issuer %s" % bitPoint.issuer())
+            result, errMsg = self.__bpVerifiers[bitPoint.issuer()].verify(bitPoint)
+            if not result:
+                return LedgerOperationFailure("BitPoint %d did not verify (%s). Aborting" % (bitPoint.serialNumber(), errMsg))
         result = self.__vault.add(bitPoints)
         if not result.succeeded():
             return result
@@ -356,7 +399,7 @@ class Ledger(PermanentObjectMixin):
         #except Exception, e:
         #    print "Exception", e
         #    return LedgerOperationFailure(str(e))
-        self.__ledgerLine.setTransaction(time.asctime(), "vault deposit", ("CIRCULATION",account, len(bitPoints)))
+        self.__ledgerLine.setTransaction(time.asctime(), "cash deposit", ("CIRCULATION",account, len(bitPoints)))
         self.__nextLedgerLine()
         self.__save()
         if not self.__reconcileCirculation():

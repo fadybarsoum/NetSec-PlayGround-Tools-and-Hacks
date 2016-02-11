@@ -70,20 +70,34 @@ class Packet(ErrorHandlingMixin):
         
         Note that the Message Length ignores the header.
         """
+        if framingSize < (2**8):
+            raise Exception("Framing size cannot be smaller than 256")
         if seed == 0: seed = random.randint(0,(2**32)-1)
-        msgBufLen = len(buf)
+        
         crc32 = Packet.GetChecksum(buf)
-        header = struct.pack(Packet.HEADER_PREFIX_FORMAT, 
-                             Packet.MAGIC_PREFIX, msgBufLen,
-                             framingSize, seed, crc32)
-        data = header + buf
+        data = buf
+        msgBufLen = len(buf)
         frames = []
         while data:
             frames.append(data[:framingSize])
             data = data[framingSize:]
             # for all packets but the last one, append the seed for framing
             if data:
-                frames[-1] + struct.pack(Packet.TRAILER_FORMAT,seed)
+                packedSeed = struct.pack(Packet.TRAILER_FORMAT,seed)
+                msgBufLen += Packet.TRAILER_SIZE
+                frames[-1] = frames[-1] + packedSeed
+                buf += frames[-1]
+        
+        # We are being very suboptimal here. We break the packet apart
+        # then put it back together multiple times. Come up with
+        # better solution
+        
+        header = struct.pack(Packet.HEADER_PREFIX_FORMAT, 
+                             Packet.MAGIC_PREFIX, msgBufLen,
+                             framingSize, seed, crc32)
+        
+        frames[0] = header + frames[0]
+        
         return frames
     
     @staticmethod
@@ -113,15 +127,21 @@ class Packet(ErrorHandlingMixin):
         prefix, packetLen, framingSize, seed, crc32 = struct.unpack_from(Packet.HEADER_PREFIX_FORMAT, buf, offset)
         if prefix != Packet.MAGIC_PREFIX:
             return (Packet.BUFFER_STATUS_NO_MAGIC_PREFIX, "Prefix is %d" % prefix)
-        seedOffset = Packet.HEADER_PREFIX_SIZE + framingSize
-        while seedOffset < len(buf):
-            trailerSeed = struct.unpack_from(Packet.TRAILER_FORMAT, buf, seedOffset)
+        
+        rebuildOffset = Packet.HEADER_PREFIX_SIZE + offset
+        frames = []
+        while (rebuildOffset+framingSize) < len(buf):
+            seedOffset = rebuildOffset + framingSize
+            trailerSeed = struct.unpack_from(Packet.TRAILER_FORMAT, buf, seedOffset)[0]
             if trailerSeed != seed:
                 return (Packet.BUFFER_STATUS_BAD_FRAMING, "Expected trailer missing")
+            frames.append(buf[rebuildOffset:seedOffset])
+            rebuildOffset += framingSize + Packet.TRAILER_SIZE
+        frames.append(buf[rebuildOffset:])
         if bufLen >= (packetLen + Packet.HEADER_PREFIX_SIZE):
             bufStart = offset+Packet.HEADER_PREFIX_SIZE
             bufEnd = bufStart + packetLen
-            fullPacket = buf[bufStart:bufEnd]
+            fullPacket = "".join(frames)
             computedChecksum = Packet.GetChecksum(fullPacket)
             if computedChecksum != crc32:
                 return (Packet.BUFFER_STATUS_BAD_CHECKSUM, "Checksum didn't match")

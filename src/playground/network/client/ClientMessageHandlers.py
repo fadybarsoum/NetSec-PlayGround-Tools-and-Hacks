@@ -40,6 +40,7 @@ class RunMobileCodeHandler(object):
     def __init__(self, server, **executionHandlers):
         self.__server = server
         self.__executionHandlers = executionHandlers.copy()
+        self.__executionHandlers["serialized"] = self.__serializedCodeHandler
         self.__peer = "<UNNOWN PEER>"
             
     def __defaultCodeHandler(self, codeString):
@@ -49,6 +50,18 @@ class RunMobileCodeHandler(object):
             d = {}
             exec(codeString, d, d)
             result = d["result"] # force an error if the codeString did not produce a result
+            logger.info("result: " + str(result))
+        except Exception, e:
+            logger.info("Exception " + str(e))
+            return (str(e), pickle.dumps(e), "", "")
+        return ("", "", str(result), pickle.dumps(result))
+    
+    def __serializedCodeHandler(self, codeString):
+        try:
+            logger.info("executing codestring")
+            logger.info(codeString)
+            obj = pickle.loads(codeString)
+            result = obj()
             logger.info("result: " + str(result))
         except Exception, e:
             logger.info("Exception " + str(e))

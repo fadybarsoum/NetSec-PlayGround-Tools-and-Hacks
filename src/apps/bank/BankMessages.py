@@ -5,7 +5,7 @@ Created on Apr 1, 2014
 '''
 
 from playground.network.message.ProtoBuilder import MessageDefinition
-from playground.network.message.StandardMessageSpecifiers import INT8, UINT8, STRING, LIST, OPTIONAL
+from playground.network.message.StandardMessageSpecifiers import BOOL1, INT8, UINT8, STRING, LIST, OPTIONAL
 
 class OpenSession(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.bank.OpenSession"
@@ -22,6 +22,55 @@ class SessionOpen(MessageDefinition):
     BODY = [
             ("ClientNonce",UINT8),
             ("ServerNonce",UINT8),
+            ("Account",STRING)
+            ]
+    
+class ListAccounts(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.bank.ListAccounts"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("User",STRING,OPTIONAL)
+            ]
+    
+class ListAccountsResponse(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.bank.ListAccountsResponse"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("Accounts",LIST(STRING))
+            ]
+    
+class CurrentAccount(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.bank.CurrentAccount"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8)
+            ]
+    
+class CurrentAccountResponse(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.bank.CurrentAccountResponse"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("Account",STRING)
+            ]
+    
+class SwitchAccount(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.bank.SwitchAccount"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
             ("Account",STRING)
             ]
     
@@ -76,8 +125,8 @@ class TransferRequest(MessageDefinition):
             ("Memo",STRING)
             ]
     
-class VaultDepositRequest(MessageDefinition):
-    PLAYGROUND_IDENTIFIER= "apps.bank.VaultDepositRequest"
+class DepositRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.DepositRequest"
     MESSAGE_VERSION="1.0"
     BODY = [
             ("ClientNonce",UINT8),
@@ -86,14 +135,36 @@ class VaultDepositRequest(MessageDefinition):
             ("bpData",STRING)
             ]
     
-class VaultDepositReceipt(MessageDefinition):
-    PLAYGROUND_IDENTIFIER= "apps.bank.VaultDepositReceipt"
+class WithdrawalRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.WithdrawlRequest"
     MESSAGE_VERSION="1.0"
     BODY = [
             ("ClientNonce",UINT8),
             ("ServerNonce",UINT8),
             ("RequestId",UINT8),
-            ("Balance",UINT8)
+            ("Amount",INT8)
+            ]
+    
+class WithdrawalResponse(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.WithdrawalResponse"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("bpData",STRING)
+            ]
+
+class SetUserPasswordRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.SetUserPasswordRequest"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("loginName", STRING),
+            ("oldPwHash", STRING),
+            ("newPwHash", STRING)
             ]
     
 class CreateAccountRequest(MessageDefinition):
@@ -103,21 +174,41 @@ class CreateAccountRequest(MessageDefinition):
             ("ClientNonce",UINT8),
             ("ServerNonce",UINT8),
             ("RequestId",UINT8),
-            ("loginName",STRING),
             ("AccountName", STRING),
-            ("pwHash",STRING)
             ]
-
-class ChangePasswordRequest(MessageDefinition):
-    PLAYGROUND_IDENTIFIER= "apps.bank.ChangePasswordRequest"
+    
+class CurAccessRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.CurAccessRequest"
     MESSAGE_VERSION="1.0"
     BODY = [
             ("ClientNonce",UINT8),
             ("ServerNonce",UINT8),
             ("RequestId",UINT8),
-            ("loginName", STRING),
-            ("oldPwHash", STRING),
-            ("newPwHash", STRING)
+            ("UserName", STRING, OPTIONAL),
+            ("AccountName", STRING, OPTIONAL),
+            ]
+    
+class CurAccessResponse(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.CurAccessResponse"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("Accounts", LIST(STRING)),
+            ("Access", LIST(STRING))
+            ]
+    
+class ChangeAccessRequest(MessageDefinition):
+    PLAYGROUND_IDENTIFIER= "apps.bank.ChangeAccessRequest"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce",UINT8),
+            ("ServerNonce",UINT8),
+            ("RequestId",UINT8),
+            ("UserName", STRING),
+            ("Account", STRING, OPTIONAL),
+            ("AccessString", STRING)
             ]
     
 class RequestSucceeded(MessageDefinition):
@@ -155,6 +246,21 @@ class RequestFailure(MessageDefinition):
             ("ClientNonce", UINT8),
             ("ServerNonce", UINT8),
             ("RequestId", UINT8),
+            ("ErrorMessage", STRING)]
+    
+class PermissionDenied(MessageDefinition):
+    PLAYGROUND_IDENTIFIER = "apps.bank.PermissionDenied"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("ClientNonce", UINT8),
+            ("ServerNonce", UINT8),
+            ("RequestId", UINT8),
+            ("ErrorMessage", STRING)]
+    
+class ServerError(MessageDefinition):
+    PLAYGROUND_IDENTIFIER = "apps.bank.ServerError"
+    MESSAGE_VERSION="1.0"
+    BODY = [
             ("ErrorMessage", STRING)]
     
 class Close(MessageDefinition):
