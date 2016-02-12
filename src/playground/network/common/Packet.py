@@ -141,7 +141,10 @@ class Packet(ErrorHandlingMixin):
         frames = [] 
         
         # while our local offset plus another frame is less than the length of the packet
-        while (rebuildOffset+framingSize) < maxPacketOffset:
+        # also check the length of the buffer. We have to do both. If we check the packet size,
+        # we might be working with a "too small" buffer. But if we check the buffer,
+        # we can go past the length of the packet
+        while (rebuildOffset+framingSize) < maxPacketOffset and (rebuildOffset+framingSize) < len(buf):
             
             # seedOffset is the location of the seed demarcating the end of the frame
             # It's the start of the packet + the current frame start + frame size
