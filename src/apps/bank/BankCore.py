@@ -4,11 +4,12 @@ Created on Apr 1, 2014
 @author: sethjn
 '''
 
-import sqlite3, os, pickle, sys, time, dbm
+import sqlite3, os, pickle, sys, time, dbm, traceback, base64
 from CipherUtil import EncryptThenHmac, EncryptThenRsaSign, SHA, DefaultSign, X509Certificate, RSA
 from PermanentObject import PermanentObjectMixin
 from collections import OrderedDict
 from PrintingPress import BitPointVerifier
+from Exchange import BitPoint
 
 
 class LedgerLine(object):
@@ -132,9 +133,11 @@ class SecureItemStorage(PermanentObjectMixin):
     
     @classmethod
     def serialize(cls, o):
-        if hasattr(o, "serialize"):
-            return o.serialize()
         return pickle.dumps(o)
+    
+    @classmethod
+    def deserialize(cls, s):
+        return pickle.loads(s)
     
     @staticmethod
     def filehash(fObj, readSize=1024):
@@ -220,12 +223,14 @@ class SecureItemStorage(PermanentObjectMixin):
         for key, secureSerialized in self._commitAddRequired.items():
             self._db[key] = secureSerialized
         self._save()
+        self._commitAddRequired.clear()
         return LedgerOperationSuccess()
     
     def commitRemove(self):
         for key in self._commitRemoveRequired:
             del self._db[key]
         self._save()
+        self._commitRemoveRequired.clear()
         return LedgerOperationSuccess()
     
     def keys(self):
@@ -238,6 +243,7 @@ class SecureItemStorage(PermanentObjectMixin):
         temp = self._db.get(key, default)
         if temp != default:
             temp = self.unsecureSerializedObject(temp, key, self.__password) 
+            temp = self.deserialize(temp)
         return temp
         
     def remove(self, objects):
@@ -248,14 +254,22 @@ class SecureItemStorage(PermanentObjectMixin):
         return result
     
     def __removeToTemp(self, objects, temp):
-        for key in objects:
-            if self._db.has_key(key):
-                temp.add(key)
-            else:
-                return LedgerOperationFailure("No such key %s" % key)
+        for o in objects:
+            key = self.getKey(o)
+            if not self.has_key(key):
+                return LedgerOperationFailure("Key %s does not exist in vault" % self.getKey(o))
+            temp.add(key)
         return LedgerOperationSuccess()
     
 class BitPointVault(SecureItemStorage):
+    @classmethod
+    def serialize(cls, o):
+        return o.serialize()
+    
+    @classmethod
+    def deserialize(cls, s):
+        return BitPoint.deserialize(s)[0]
+    
     @classmethod
     def getKey(cls, bp):
         return str(bp.serialNumber())
@@ -342,14 +356,13 @@ class Ledger(PermanentObjectMixin):
     def __reconcileCirculation(self):
         return self.__ledgerLine.getBalance("CIRCULATION") == (-len(self.__vault.keys()))
     
-    def registerMintCert(self, cert):
+    def registerMintCert(self, certObj):
         try:
-            with open(cert) as f:
-                certObj = X509Certificate.loadPEM(f.read())
-                self.__mintCerts[certObj.getSubject()["commonName"]] = certObj
-                self.__bpVerifiers[certObj.getSubject()["commonName"]] = BitPointVerifier(certObj)
+            self.__mintCerts[certObj.getSubject()["commonName"]] = certObj
+            self.__bpVerifiers[certObj.getSubject()["commonName"]] = BitPointVerifier(certObj)
         except Exception, e:
-            return LedgerOperationFailure("Could not register cert for mint: %s" % str(e))
+            errMsg = traceback.format_exc()
+            return LedgerOperationFailure("Could not register cert for mint: %s" % errMsg)
         return LedgerOperationSuccess()
     
     def withdrawCash(self, account, amount):
@@ -363,18 +376,27 @@ class Ledger(PermanentObjectMixin):
         if len(bitpointKeys) < amount:
             return LedgerOperationFailure("Not enough Bitpoints in the vault for withdrawl")
         bitpoints = []
-        for bitpointKey in self.__vault.keys():
+        for bitpointKey in bitpointKeys:
             bitpoints.append(self.__vault.get(bitpointKey))
         result = self.__vault.remove(bitpoints)
         if not result.succeeded():
             return result
-        self.__ledgerLine.setTransaction(time.asctime(), "cash withdrawl", ("CIRCULATION",account, amount))
+        self.__ledgerLine.setTransaction(time.asctime(), "cash withdrawl", (account, "CIRCULATION", amount))
         self.__nextLedgerLine()
         self.__save()
-        commit = self.__vault.commitAdd()
+        commit = self.__vault.commitRemove()
         if not commit.succeeded:
             return commit
-        # We need to reconcile circulation here...
+        if not self.__reconcileCirculation():
+            errMsgTemplate = "There was a mismatch. Circulation account is %d, bitpoints only total %d. Transaction reversed."
+            errMsg = errMsgTemplate % (self.__ledgerLine.getBalance("CIRCULATION"),len(self.__vault.keys()))
+            self.__ledgerLine.setTransaction(time.asctime(), "cash reverse", ("CIRCULATION", account, len(bitpoints)))
+            self.__nextLedgerLine()
+            self.__save()
+            # attempt to remove added bitpoints
+            result = self.__vault.add(bitpoints)
+            if result.succeeded(): self.__vault.commitAdd()
+            return LedgerOperationFailure(errMsg)
         return LedgerOperationSuccess(value=bitpoints)
         
     def depositCash(self, account, bitPoints):
@@ -442,10 +464,6 @@ class Ledger(PermanentObjectMixin):
             return LedgerOperationFailure("No such ledger line %s" % ledgerNumber)
         ledger = self.__ledgerStorage.get(ledgerNumber)
         if not ledger:
-            return LedgerOperationFailure("Could not restore ledger.")
-        try:
-            ledger = pickle.loads(ledger)
-        except:
             return LedgerOperationFailure("Could not restore ledger.")
         ledgerSerialized = self.__ledgerStorage.serialize(ledger.receiptForm(forAccount))
         signature = DefaultSign(ledgerSerialized, self.__privateKey)

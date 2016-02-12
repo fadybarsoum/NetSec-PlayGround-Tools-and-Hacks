@@ -376,7 +376,6 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         
     def __handleDeposit(self, protocol, msg):
         # requires: regular(d)
-        print "Got deposit"
         msgObj = msg.data()
         account, access = self.__getSessionAccount(msgObj)
         if not account:
@@ -390,17 +389,14 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         bpData = msgObj.bpData
         while bpData:
             newBitPoint, offset = BitPoint.deserialize(bpData)
-            print "bpData now", len(bpData),"bitpoint count", len(bps)
             bpData = bpData[offset:]
             bps.append(newBitPoint)
         result = self.__bank.depositCash(account,bps)
         if not result.succeeded():
-            print "failed"
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData(result.msg())
         else:
-            print "succeeded"
             result = self.__bank.generateReceipt(account)
             if not result.succeeded():
                 response = self.__createResponse(msgObj, RequestFailure)
@@ -530,9 +526,9 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         accountsAccess = []
         if accountName:
             accounts.append(accountName)
-            accountsAccess.append(self.__pwDb.currentAccess(userName, accountName))
+            accountsAccess.append(self.__pwDb.currentAccess(checkUserName, accountName))
         else:
-            accessMulti = self.__pwDb.currentAccess(userName)
+            accessMulti = self.__pwDb.currentAccess(checkUserName)
             for accountName, accountAccessString in accessMulti.items():
                 accounts.append(accountName)
                 accountsAccess.append(accountAccessString)
@@ -653,6 +649,9 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
         d = defer.Deferred()
         self.__deferred[rId] = d
         return rId, d
+    
+    def verify(self, msg, sig):
+        return self.__verifier.verify(SHA.new(msg), sig)
     
     def state(self): return self.__state
     
@@ -831,17 +830,6 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
             self.transport.writeMessage(closeMsg)
             self.callLater(.1, self.transport.loseConnection)
         
-    def __handleReceipt(self, protocol, msg):
-        if self.__state != self.STATE_OPEN:
-            return self.__error("Unexpected Request Response")
-        msgObj = msg.data()
-        d = self.__validateStdSessionResponse(msgObj)
-        if not d: return
-        
-        if not self.__verifier.verify(SHA.new(msgObj.Receipt), msgObj.ReceiptSignature):
-            return d.errback(Exception("Received a receipt with mismatching signature\n%s\n%s" % (SHA.new(msgObj.Receipt), msgObj.ReceiptSignature)))
-        d.callback((msgObj.Receipt, msgObj.ReceiptSignature))
-        
     def __handleRequestFailure(self, protocol, msg):
         msgObj = msg.data()
         if self.__state != self.STATE_OPEN:
@@ -865,9 +853,15 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
             return self.__reportExceptionAsDeferred(Exception("Cannot login. State: %s" % self.__state))
         depositMsg, d = self.__createStdSessionRequest(DepositRequest)
         depositMsg["bpData"].setData(serializedBp)
-        print "sending depsoit message of size", len(depositMsg.serialize())
         self.transport.writeMessage(depositMsg)
-        print "sent"
+        return d
+    
+    def withdraw(self, amount):
+        if self.state() != self.STATE_OPEN:
+            return self.__reportExceptionAsDeferred(Exception("Cannot login. State: %s" % self.__state))
+        withdrawalMsg, d = self.__createStdSessionRequest(WithdrawalRequest)
+        withdrawalMsg["Amount"].setData(amount)
+        self.transport.writeMessage(withdrawalMsg)
         return d
         
     def adminCreateUser(self, loginName, password):
@@ -1037,17 +1031,23 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
         self.transport.write("\n\n>")
         self.reset()
         
-    def __deposit(self, msgObj):
-        newBalance = msgObj.Balance
-        self.transport.write("\tDeposited. New balance is %d\n" % newBalance)
-        self.transport.write("\n\n>")
-        self.reset()
-        
-    def __transfer(self, result):
-        #receipt, rSig = result
-        self.transport.write("\tTransfer complete.\n")
-        self.transport.write("\n\n>")
-        self.reset()
+    def __receipt(self, msgObj):
+        receiptFile = "bank_receipt."+str(time.time())
+        sigFile = receiptFile + ".signature"
+        self.transport.write("Receipt and signature received. Saving as %s and %s\n" % (receiptFile, sigFile))
+        with open(receiptFile, "wb") as f:
+            f.write(msgObj.Receipt)
+        with open(sigFile, "wb") as f:
+            f.write(msgObj.ReceiptSignature)
+        if not self.__bankClient.verify(msgObj.Receipt, msgObj.ReceiptSignature):
+            self.transport.write("Received a receipt with mismatching signature\n")
+            self.transport.write("Please report this to the bank administrator\n")
+            self.transport.write("Quitting\n")
+            self.__quit()
+        else:
+            self.transport.write("Valid receipt received. Transaction complete.")
+            self.transport.write("\n\n>")
+            self.reset()
         
     def __createAccount(self, result):
         self.transport.write("\tAccount created.\n")
@@ -1230,7 +1230,7 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
                 with open(bpFile) as f:
                     bpData = f.read()
                     self.__d = bankClient.deposit(bpData)
-                    self.__d.addCallback(self.__deposit)
+                    self.__d.addCallback(self.__receipt)
                     self.__d.addErrback(self.__failed)
             elif cmd == "withdraw":
                 if len(args) != 1:
@@ -1241,7 +1241,7 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
                 except:
                     self.transport.write("Not a valid amount %s\n" % args[0])
                     return self.reset()
-                self.__d = bankClient.withdrawCash(amount)
+                self.__d = bankClient.withdraw(amount)
                 self.__d.addCallback(self.__withdrawl)
                 self.__d.addErrback(self.__failed)
             elif cmd == "transfer":
@@ -1255,7 +1255,7 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
                     self.transport.write("Can't convert amount to int\n")
                     return self.reset()
                 self.__d = bankClient.transfer(dstAcct, amount, memo)
-                self.__d.addCallback(self.__transfer)
+                self.__d.addCallback(self.__receipt)
                 self.__d.addErrback(self.__failed)
             elif cmd == "account":
                 if len(args) == 0:
@@ -1276,7 +1276,14 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
                     self.__d = bankClient.adminCreateAccount(args[0])
                     self.__d.addCallback(self.__createAccount)
                     self.__d.addErrback(self.__failed)
+                else:
+                    self.transport.write("No arguments expected or argument 'all' to list all balances (admin only)\n")
+                    return self.reset()
             elif cmd == "user":
+                if len(args) == 0:
+                    self.transport.write("Requires at least one more argument\n")
+                    return self.reset()
+                subcmd = args.pop(0)
                 if subcmd == "create":
                     if not self.__admin:
                         self.transport.write("Not in admin mode\n")
@@ -1312,6 +1319,9 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
                     self.__d = bankClient.changePassword(password2, loginName=loginName, oldPassword=oldPassword)
                     self.__d.addCallback(self.__changePassword)
                     self.__d.addErrback(self.__failed)
+                else:
+                    self.transport.write("No arguments expected or argument 'all' to list all balances (admin only)\n")
+                    return self.reset()
             elif cmd == "quit":
                 bankClient.close()
                 self.transport.loseConnection()
@@ -1361,7 +1371,9 @@ class PlaygroundNodeControl(object):
             mintCertFile = serverData["mint_cert_file"]
             with open(mintCertFile) as f:
                 cert = X509Certificate.loadPEM(f.read())
-            bank.registerMintCert(cert)
+            result = bank.registerMintCert(cert)
+            if not result.succeeded():
+                print "Could not load certificate", result.msg()
         self.__mode = "server"
         return (True,"")
     
@@ -1441,6 +1453,8 @@ class PasswordData(object):
         self.__tmpPwTable = {}
         self.__tmpAccountTable = {self.ADMIN_ACCOUNT:0}
         self.__tmpUserTable = {}
+        for tableName in Ledger.INITIAL_ACCOUNTS:
+            self.__tmpAccountTable[tableName]=0
         self.sync()
         
     def __loadDB(self, filename):
@@ -1467,7 +1481,7 @@ class PasswordData(object):
             del self.__tmpUserTable[userName]
             
     def __addAccount(self, accountName):
-        self.__tmpAccountTable[accountName] = 0
+        self.__tmpAccountTable[accountName] = 1
         
     def hasUser(self, userName):
         return self.__tmpPwTable.has_key(userName)
