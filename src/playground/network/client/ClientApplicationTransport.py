@@ -114,6 +114,7 @@ class ClientApplicationTransport(object):
             
                                                                                    toClientMsg["dstAddress"].data()))
             packetBytes = Packet.MsgToPacketBytes(toClientMsg)
+            print "Sending",len(packetBytes),"byte packet"
             self.__transport.write(packetBytes)
             self.__multiplexingProducer.signalRawWrite()
         

@@ -87,10 +87,6 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         self.registerMessageHandler(CurAccessRequest, self.__handleCurAccess)
         self.registerMessageHandler(Close, self.__handleClose)
         
-    def messageReceived(self, msg):
-        print "Received msg", msg
-        return SimpleMessageHandlingProtocol.messageReceived(self, msg)
-        
     def __loadMibs(self):
         if self.MIBAddressEnabled():
             self.registerLocalMIB(self.MIB_CURRENT_STATE, self.__handleMib)

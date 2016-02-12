@@ -74,8 +74,11 @@ class Packet(ErrorHandlingMixin):
             raise Exception("Framing size cannot be smaller than 256")
         if seed == 0: seed = random.randint(0,(2**32)-1)
         
+        # CRC is over the original data
         crc32 = Packet.GetChecksum(buf)
         data = buf
+        
+        # len includes frames (added a few lines down)
         msgBufLen = len(buf)
         frames = []
         while data:
@@ -86,7 +89,7 @@ class Packet(ErrorHandlingMixin):
                 packedSeed = struct.pack(Packet.TRAILER_FORMAT,seed)
                 msgBufLen += Packet.TRAILER_SIZE
                 frames[-1] = frames[-1] + packedSeed
-                buf += frames[-1]
+                #buf += frames[-1]
         
         # We are being very suboptimal here. We break the packet apart
         # then put it back together multiple times. Come up with
@@ -128,17 +131,31 @@ class Packet(ErrorHandlingMixin):
         if prefix != Packet.MAGIC_PREFIX:
             return (Packet.BUFFER_STATUS_NO_MAGIC_PREFIX, "Prefix is %d" % prefix)
         
+        # rebuildOffset. The start of the packet data
         rebuildOffset = Packet.HEADER_PREFIX_SIZE + offset
-        maxPacketOffset = Packet.HEADER_PREFIX_SIZE + offset + packetLen
-        frames = []
-        frameOffset = 0 
-        while (frameOffset+framingSize) < maxPacketOffset:
-            seedOffset = frameOffset + framingSize
+        
+        # maxPacketOffset. The end of the packet data (start + packetLen, which includes frames)
+        maxPacketOffset = rebuildOffset + packetLen
+        
+        # the frames restored
+        frames = [] 
+        
+        # while our local offset plus another frame is less than the length of the packet
+        while (rebuildOffset+framingSize) < maxPacketOffset:
+            
+            # seedOffset is the location of the seed demarcating the end of the frame
+            # It's the start of the packet + the current frame start + frame size
+            seedOffset = rebuildOffset + framingSize
+            
+            # we've restored the seed from the end of the frame
             trailerSeed = struct.unpack_from(Packet.TRAILER_FORMAT, buf, seedOffset)[0]
             if trailerSeed != seed:
                 return (Packet.BUFFER_STATUS_BAD_FRAMING, "Expected trailer missing")
-            frames.append(buf[frameOffset:seedOffset])
-            frameOffset += framingSize + Packet.TRAILER_SIZE
+            
+            # Within the buffer, the frame starts here
+            frames.append(buf[rebuildOffset:seedOffset])
+            rebuildOffset += framingSize + Packet.TRAILER_SIZE
+        # get the last frame. It goes from the current frame offset to the end of the packet
         frames.append(buf[rebuildOffset:maxPacketOffset])
         if bufLen >= (packetLen + Packet.HEADER_PREFIX_SIZE):
             fullPacket = "".join(frames)
