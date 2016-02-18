@@ -7,8 +7,7 @@ import playground
 from playground.error import ErrorHandler
 from playground.network.common import Timer
 
-from twisted.protocols import basic
-from twisted.internet import stdio
+from utils.ui import CLIShell, stdio
 
 import sys, os, logging, importlib, argparse, traceback
 
@@ -181,68 +180,83 @@ class ScriptTransport(object):
             self.__transport.write(self.__prefix + msg)     
         
     def loseConnection(self, *args, **kargs):
-        self.__closed = True   
+        self.__closed = True
+        
+def PythonModuleCompleter(s, state):
+    try:
+        sParts = s.split(".")
+        pathFirstPart = os.sep.join(sParts[:-1])
+        moduleFirstPart = ".".join(sParts[:-1])
+        if moduleFirstPart: moduleFirstPart +="."
 
-class PlaygroundNodeCLI(basic.LineReceiver, ErrorHandler):
+        pathIncomplete = sParts[-1]
+        fullFirstPath = None
+        for baseDir in [os.getcwd()]+sys.path:
+            if os.path.exists(os.path.join(baseDir,pathFirstPart)):
+                fullFirstPath = os.path.join(baseDir, pathFirstPart)
+                break
+
+        if fullFirstPath:
+            fIndex = 0
+            for fileName in os.listdir(fullFirstPath):
+                if fileName.startswith(pathIncomplete):
+                    fullPath = os.path.join(fullFirstPath, fileName)
+                    canTab = False
+                    trimSize = 0
+                    if os.path.isdir(fullPath):
+                        canTab = True
+                    elif fullPath.endswith(".py"):
+                        canTab = True
+                        trimSize = -3
+                    elif fullPath.endswith(".pyc") or fullPath.endswith(".pyo"):
+                        canTab = True
+                        trimSize = -4
+        
+                    if canTab and fIndex == state:
+                        if trimSize != 0:
+                            fileName = fileName[:trimSize]
+                        return moduleFirstPart+fileName
+                    fIndex += 1
+        return None 
+    except Exception, e:
+        print e, traceback.format_exc()
+        return None  
+
+class PlaygroundNodeCLI(CLIShell, ErrorHandler):
     delimiter = os.linesep
     
     def __init__(self, node):
+        CLIShell.__init__(self, prompt = "%s > " % node.nodeAddress)
         self.__node = node
-        self.__d = None
         self.__backlog = ""
-        self.__history = []
-        self.__historyMaxSize=20
-        self.__commandHandler = {
-                "launch": (self.__loadScript, self.__loadScriptArguments),
-                "list": (self.__listRunningScripts, None),
-                "stop": (self.__stopScript, self.__stopScriptArguments),
-                "help": (self.__help, None),
-                "h": (self.__getHistory, self.__getHistoryArgs),
-                "interact": (self.__interact, self.__interactArgs),
-                "quit": (self.__quit, None)
-                                 }
+        launchHandler = CLIShell.CommandHandler("launch", "Launch a script in this playground node",
+                                                defaultCb=self.__loadScript,
+                                                defaultArgHandler=self.__loadScriptArguments,)
+        listHandler = CLIShell.CommandHandler("list", "List all running scripts",
+                                              defaultCb=self.__listRunningScripts)
+        stopHandler = CLIShell.CommandHandler("stop", "Stop a running script",
+                                              defaultCb=self.__stopScript,
+                                              defaultArgHandler=self.__stopScriptArguments)  
+        interactHandler = CLIShell.CommandHandler("interact", "Launch an interactive process's UI",
+                                                  defaultCb=self.__interact,
+                                                  defaultArgHandler=self.__interactArgs)
+        launchHandler.argCompleters["_m:"] =PythonModuleCompleter
+        self.registerCommand(launchHandler)
+        self.registerCommand(listHandler)
+        self.registerCommand(stopHandler)
+        self.registerCommand(interactHandler)
         self.__loadedModules = {}
         self.__interactiveProtocol = None
-        
-    def __quit(self):
-        self.transport.loseConnection()
-        Timer.callLater(.1, self.__node.shutdown())
-        
-    def __help(self):
-        self.transport.write("\tCommands:\n\t\t%s\n"%"\n\t\t".join(self.__commandHandler.keys()))
-        
-    def __getHistoryArgs(self, args):
-        if len(args) == 0:
-            return (args, "")
-        if len(args) == 1:
-            historyLine = int(args[0])
-            if historyLine <= 0:
-                return (None, "\tInvalid argument. History line number must be greater than 0")
-            return ((historyLine,), "")
-        return (None, "\tHistory command expects no arguments or a single number")
+
     
-    def __getHistory(self, lineNumber=None):
-        if lineNumber == None:
-            if len(self.__history)==0:
-                self.transport.write("\tNO HISTORY\n")
-            else:
-                index = 1
-                for line in self.__history:
-                    self.transport.write("\t%d. %s\n" % (index, line))
-                    index += 1
-        else:
-            if lineNumber > len(self.__history):
-                self.transport.write("\tNo such history line.\n")
-            else:
-                self.lineReceived(self.__history[lineNumber-1])
-    
-    def __loadScriptArguments(self, args):
+    def __loadScriptArguments(self, writer, *args):
         if len(args) < 1:
-            return (None, "\tExpected  at least 1 argument (module name)")
+            writer("\tExpected at least 1 argument (module name)\n")
+            return None
         moduleName = args[0]
-        return ((moduleName, args[1:]),"")
+        return (moduleName, args[1:])
             
-    def __loadScript(self, moduleName, scriptArgs):
+    def __loadScript(self, writer, moduleName, scriptArgs):
         #scriptModuleName = scriptModuleName[:-3] # remove ".py"
         curInvocation = self.__loadedModules.get(moduleName,0)
         self.__loadedModules[moduleName] = curInvocation + 1
@@ -254,7 +268,7 @@ class PlaygroundNodeCLI(basic.LineReceiver, ErrorHandler):
         try:
             module = importlib.import_module(moduleName)
         except ImportError, e:
-            self.transport.write("\tCannot load script. Import Error: "+str(e))
+            writer("\tCannot load script. Import Error: "+str(e)+"\n")
             self.handleException(e)
             return
         """
@@ -273,50 +287,52 @@ class PlaygroundNodeCLI(basic.LineReceiver, ErrorHandler):
         module.Name += "_%d" % curInvocation
         result, msg = self.__node.startScript(module, scriptArgs)
         if result == False:
-            self.transport.write("\t"+msg + "\n")
+            writer("\t"+msg + "\n")
         else:
-            self.transport.write("\tScript loaded\n")
+            writer("\tScript loaded\n")
             #uiProtocol.makeConnection()
     
-    def __interactArgs(self, args):
+    def __interactArgs(self, writer, *args):
         if len(args) != 1:
-            return (None, "\tExpected at least 1 argument (ScriptName)")
+            writer("\tExpected at least 1 argument (ScriptName)")
+            return None
         scriptName = args[0]
         if self.__node.getStdioUI(scriptName)[0] == None:
-            self.transport.write("\tNo interactive script %s" % scriptName)
-        return ((scriptName,), "")
+            writer("\tNo interactive script %s\n" % scriptName)
+        return (scriptName,)
     
-    def __interact(self, scriptName):
+    def __interact(self, writer, scriptName):
         uiProtocol, msg = self.__node.getStdioUI(scriptName)
         if uiProtocol == None:
-            self.transport.write("\tCan't interact with %s. Reason=%s\n" % (scriptName, msg))
+            writer("\tCan't interact with %s. Reason=%s\n" % (scriptName, msg))
             return
-        self.transport.write("\tEntering interactive mode with script %s.\n" % scriptName)
-        self.transport.write("\tAll input will be sent to that script. To return,\n")
-        self.transport.write("\tenter 'HOME' at the prompt.\n")
+        writer("\tEntering interactive mode with script %s.\n" % scriptName)
+        writer("\tAll input will be sent to that script. To return,\n")
+        writer("\tenter '_HOME_' at the prompt.\n")
         if uiProtocol.transport == None:
             scriptTransport = ScriptTransport(scriptName, self.transport)
             uiProtocol.makeConnection(scriptTransport)
         self.__interactiveProtocol = uiProtocol           
     
-    def __listRunningScripts(self):
+    def __listRunningScripts(self, writer):
         for scriptName in self.__node.runningScripts.keys():
             interactiveText = ""
             if self.__node.getStdioUI(scriptName)[0] != None:
                 interactiveText += " (interactive)"
-            self.transport.write("\t%s%s\n" % (scriptName, interactiveText))
+            writer("  %s%s\n" % (scriptName, interactiveText))
             for port in self.__node.runningScripts[scriptName][1]:
-                self.transport.write("\t\t%d in use\n" % port)
+                writer("    %d in use\n" % port)
     
-    def __stopScriptArguments(self, args):
+    def __stopScriptArguments(self, writer, *args):
         if len(args) != 1:
-            return (None, "\tExpected 1 argument (script name)")
+            writer("  Expected 1 argument (script name)")
+            return None
         scriptname, = args
-        return ((scriptname,),"")   
+        return (scriptname,)   
     
-    def __stopScript(self, scriptName):
+    def __stopScript(self, writer, scriptName):
         result, msg = self.__node.stopScript(scriptName)
-        self.transport.write("\t"+msg+"\n")
+        writer("\t"+msg+"\n")
         
     
     def lineReceived(self, line):
@@ -324,16 +340,11 @@ class PlaygroundNodeCLI(basic.LineReceiver, ErrorHandler):
             return self.__interactiveLineReceived(line)
             
         try:
-            self.__lineReceivedImpl(line)
+            self.lineReceivedImpl(line)
         except Exception, e:
             self.handleException(e)
-        self.reset()
-        if line:
-            self.__history.append(line)
-            if len(self.__history) > self.__historyMaxSize:
-                self.__history.pop(0)
             
-    def __lineReceivedImpl(self, commandline):
+    """def __lineReceivedImpl(self, commandline):
         commandline = commandline.strip()
         if not commandline: return
         
@@ -354,11 +365,11 @@ class PlaygroundNodeCLI(basic.LineReceiver, ErrorHandler):
             self.transport.write(message + "\n")
             return
         
-        commandHandler(*convertedArgs)
+        commandHandler(*convertedArgs)"""
         
     def __interactiveLineReceived(self, line):
         line = line.strip()
-        if line == 'HOME':
+        if line == '_HOME_':
             self.transport.write("Exiting interactive mode.\n")
             self.reset(resetInteractivity=True)
         else:
@@ -370,17 +381,12 @@ class PlaygroundNodeCLI(basic.LineReceiver, ErrorHandler):
                 self.reset(resetInteractivity=True)
         
     def reset(self, resetInteractivity=False):
-        self.__d = None
         if resetInteractivity:
             self.__interactiveProtocol = None
         if self.__backlog:
             nextBackLog = self.__backlog.pop(0)
             self.lineReceived(nextBackLog)
-        elif self.__interactiveProtocol==None:
-            self.transport.write(">>> ")
-            
-    def connectionMade(self):
-        self.reset()
+
         
     def handleError(self, message, reporter=None, stackHack=0):
         self.transport.write("Error: %s\n" % message)
