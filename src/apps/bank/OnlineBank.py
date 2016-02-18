@@ -978,7 +978,7 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
     def __listAccounts(self, msgObj):
         self.transport.write("\tCurrent Accounts")
         for account in msgObj.Accounts:
-            self.transport.write("\t\t"+account)
+            self.transport.write("\t\t"+account+"\n")
         self.transport.write("\n\n>")
         self.reset()
         
