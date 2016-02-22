@@ -50,14 +50,37 @@ def genCert(basename, instructionTemplate, CA=None, CAkey=None, tmpFileTemplate=
     os.unlink(cnfFileName)
     return ret
 
+def signCSR(csrfile, CA, CAkey, interactive=True):
+    basename = csrfile.replace(".csr","")
+    certname = "%s_signed.cert" % basename
+    serial = random.randint(1,100000)
+    if interactive:
+        showDataStr = 'openssl req -in %s -subject' % csrfile
+        os.system(showDataStr)
+        result = raw_input("Certificate OK? ")
+        if result[0].lower() != "y":
+            return "aborted"
+    signCertStr = 'openssl x509 -req -days 360 -in %s' % csrfile
+    signCertStr += ' -CA %s' % CA
+    signCertStr += ' -CAkey %s' % CAkey 
+    signCertStr += ' -out %s' % certname
+    signCertStr += ' -set_serial %d' % serial
+    os.system(signCertStr)
+    if interactive:
+        showDataStr = 'openssl x509 -in %s -subject -serial' % certname
+        os.system(showDataStr)
+        raw_input("Generated signed cert with above referenced serial number. Press enter to quit. ")
+    return 0
+
 def usage():
     print "USAGE: %s <cnf file> [<addr3>] [<addr4>]" % sys.argv[0]
     print "USAGE: %s raw <cnf file> <raw_name>" % sys.argv[0]
+    print "USAGE: %s sign <sign_cert> <sign_key> [csrs...]" % sys.argv[0]
     print "  addr3 and addr4 can only be used if cnf file specifies"
     print "  a group code."
 
 if __name__ == "__main__":
-    if "--help" in sys.argv or len(sys.argv) < 2 or len(sys.argv) > 4:
+    if "--help" in sys.argv or len(sys.argv) < 2:
         usage()
         sys.exit(-1)
     template = ""
@@ -70,6 +93,10 @@ if __name__ == "__main__":
         with open(templateFile) as f:
             template = f.read()
         ret = genCert(rawName, template)
+    elif sys.argv[1] == "sign":
+        for csr in sys.argv[4:]:
+            signCSR(csr, sys.argv[2], sys.argv[3])
+        ret = 0
     else:
         templateFile = sys.argv[1]
         with open(templateFile) as f:
