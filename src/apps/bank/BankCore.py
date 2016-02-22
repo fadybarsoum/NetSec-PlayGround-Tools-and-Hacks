@@ -57,6 +57,9 @@ class LedgerLine(object):
     def accounts(self):
         return self.__accounts.keys()
     
+    def partOfTransaction(self, accountKey):
+        return self.__accounts[accountKey][1] != 0
+    
     def getBalance(self, accountKey):
         if accountKey not in self.__accounts.keys(): return None
         return self.__accounts[accountKey][2]
@@ -99,6 +102,30 @@ class LedgerLine(object):
         self.__transactionDate = transactionDate
         self.__transactionMemo = transactionMemo
         self.__complete = True
+        
+    def toHumanReadableString(self, forAccount=None):
+        toAccounts = []
+        fromAccounts = []
+        for account in self.__accounts.keys():
+            amount = self.__accounts[account][1]
+            if amount < 0: fromAccounts.append(account)
+            elif amount > 0: toAccounts.append(account)
+        if forAccount not in (fromAccounts + toAccounts):
+            return "(Null)\n"
+        str = "Transfer "
+        for account in fromAccounts:
+            str += "%d from %s " % (-1*self.getTransactionAmount(account), account)
+        str += "and "
+        for account in toAccounts:
+            str += "%d to %s " % (self.getTransactionAmount(account), account)
+        str += " on %s." % self.__transactionDate
+        str += "Memo: %s\n" % self.__transactionMemo
+        if forAccount:
+            str += "  %s Balance: %d\n" % (account, self.getBalance(forAccount))
+        else:
+            for account in (fromAccounts + toAccounts):
+                str += "  %s Balance: %d\n" % (account, self.getBalance(account))
+        return str
         
 class LedgerOperationResult(object):
     def __init__(self, success, msg="", code=None, value=None):
@@ -480,6 +507,9 @@ class Ledger(PermanentObjectMixin):
             except:
                 pass
         return matches
+    
+    def getLedgerLine(self, num):
+        return self.__ledgerStorage.get(str(num))
 
 """
 class OnlineBank(object):

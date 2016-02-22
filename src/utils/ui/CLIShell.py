@@ -4,33 +4,60 @@ Created on Feb 16, 2016
 @author: sethjn
 '''
 
-import os, threading, sys, textwrap, traceback
-from twisted.internet import reactor
+import os, threading, sys, textwrap, traceback, shlex
+from twisted.internet import reactor, defer
 from twisted.protocols import basic
+from defer import Deferred
 
 
 class AdvancedStdio(object):
+    ReadlineModule = None
     def __init__(self, protocol):
+        # don't import readline unless we're instantiating. Help with 
+        # platform handling
+        if not AdvancedStdio.ReadlineModule:
+            import readline
+            AdvancedStdio.ReadlineModule = readline
         self.__protocol = protocol
         self.__getLine = False
         self.__getLineLock = threading.Lock()
         self.__getLineCV = threading.Condition(self.__getLineLock)
         self.__quit = False
         self.__quitLock = threading.Lock()
+        self.__inputLock = threading.Lock()
         reactor.callInThread(self.loop)
         
     def write(self, buf):
+        if self.__inputLock.locked():
+            sys.stdout.write("\n")
         sys.stdout.write(buf)
         if not buf[-1] == "\n":
             sys.stdout.flush()
+        #else:
+        #    if not self.shouldQuit() and self.__inputLock.locked():
+        #        sys.stdout.write(self.__protocol.prompt + self.ReadlineModule.get_line_buffer())
+        #        sys.stdout.flush()
+        
+    def refreshDisplay(self):
+        if not self.shouldQuit() and self.__inputLock.locked():
+            sys.stdout.write(self.__protocol.prompt + self.ReadlineModule.get_line_buffer())
+            sys.stdout.flush()
+            
+    def getNextInput(self):
+        with self.__getLineLock:
+            self.__getLine = True
+            self.__getLineCV.notify()
         
     def loseConnection(self):
+        reactor.callLater(0,reactor.stop)
         with self.__quitLock:
             self.__quit = True
             
     def incompleteShutdown(self):
         with self.__getLineLock:
-            if not self.__getLine:
+            # I don't understand twisted shutdown handling well yet.
+            # why does ctr-c start shutdown, but not call reactor.stop?
+            if (self.__getLine and not self.__quit) or self.__inputLock.locked():
                 print "\nIncomplete shutdown (probably ctrl-c). Press enter (ctrl-d exits immediately)"
             
     def shouldQuit(self):
@@ -44,22 +71,26 @@ class AdvancedStdio(object):
                 self.__getLineCV.wait(1.0)
                 
     def __protocolProcessLine(self, line):
-        self.__protocol.lineReceived(line)
-        with self.__getLineLock:
-            self.__getLine = True
-            self.__getLineCV.notify()
+        result, d = self.__protocol.lineReceived(line)
+        if d:
+            d.addCallback(lambda result: self.getNextInput())
+        else:
+            self.getNextInput()
 
     def loop(self):
+        readline = self.ReadlineModule
         reactor.addSystemEventTrigger('before', 'shutdown', self.incompleteShutdown)
-        import readline
         readline.set_completer_delims("")
         if isinstance(self.__protocol, CompleterInterface):
             readline.set_completer(self.__protocol.complete)
         readline.parse_and_bind("tab: complete")
         self.__protocol.makeConnection(self)
+        with self.__getLineLock:
+            self.__getLine=True
         while not self.shouldQuit():
             try:
-                line = raw_input(self.__protocol.prompt)
+                with self.__inputLock:
+                    line = raw_input(self.__protocol.prompt)
             except:
                 print
                 reactor.callFromThread(reactor.stop)
@@ -124,7 +155,7 @@ class CLICommand(CompleterInterface):
     def __init__(self, cmdTxt, helpTxt, defaultCb = None, defaultArgHandler = None, mode=SINGLETON_MODE):
         self.cmdTxt = cmdTxt
         self.cb = {}
-        self.argCompleters = {"_f:":FileArgCompleter}
+        self.argCompleters = {"f://":FileArgCompleter}
         self.helpTxt = helpTxt
         self.defaultIndent = "  " # two spaces
         self.__mode = mode
@@ -198,10 +229,9 @@ class CLICommand(CompleterInterface):
         return helpTxt"""
         
     def stripCompleterKeys(self, arg):
-        if arg.startswith("_"):
-            for key, pod in self.argCompleters.items():
-                if arg.startswith(key):
-                    return arg[len(key):]
+        for key in self.argCompleters.keys():
+            if arg.startswith(key):
+                return arg[len(key):]
         return arg
         
     def configureSubcommand(self, subCmd):
@@ -230,9 +260,10 @@ class CLICommand(CompleterInterface):
             args = self.__defaultArgHandler(writer, *args)
             if args == None:
                 writer("Command failed.\n")
+                return (False, None)
             else: 
-                self.__defaultCb(writer, *args)
-            return
+                d = self.__defaultCb(writer, *args)
+                return (True, d)
         if len(args)==0:
             if not self.__defaultCb:
                 writer("Command requires arguments\n")
@@ -240,28 +271,31 @@ class CLICommand(CompleterInterface):
                 args = self.__defaultArgHandler(writer, *args)
                 if args == None:
                     writer("Command failed.\n")
+                    return (False, None)
                 else:
-                    self.__defaultCb(writer, *args)
-            return
+                    d = self.__defaultCb(writer, *args)
+                    return (True, d)
         if self.__mode == CLICommand.SUBCMD_MODE:
             subCmd = args[0]
             subCmdArgs = args[1:]
             subCmdHandler = self.cb.get(subCmd, None)
             if not subCmdHandler:
                 writer("No such command %s\n" % subCmd)
-                return
-            subCmdHandler.process(subCmdArgs, writer)
+                return (False, None)
+            return subCmdHandler.process(subCmdArgs, writer)
         else:
             args = map(self.stripCompleterKeys, args)
             argsPod = self.cb.get(len(args), None)
             if not argsPod:
                 writer("Wrong number of arguments\n")
-                return
+                return (False, None)
             args = argsPod.argHandler(writer, *args)
             if args == None:
                 writer("Command failed\n")
+                return (False, None)
             else:
-                argsPod.cmdHandler(writer, *args)
+                d = argsPod.cmdHandler(writer, *args)
+                return (True, None)
         
     def complete(self, s, state):
         if self.__mode == CLICommand.SUBCMD_MODE:
@@ -269,10 +303,14 @@ class CLICommand(CompleterInterface):
         elif self.__mode in [CLICommand.STANDARD_MODE, CLICommand.SINGLETON_MODE]:
             args = s.split(" ")
             tabArg = args[-1]
+            finishedArgs = args[:-1]
             for key in self.argCompleters.keys():
                 if tabArg.startswith(key):
                     tabArgWithoutKey=tabArg[len(key):]
-                    return key+self.argCompleters[key](tabArgWithoutKey, state)
+                    completeString = ""
+                    if finishedArgs: completeString += " ".join(finishedArgs) + " "
+                    completeString += key + self.argCompleters[key](tabArgWithoutKey, state)
+                    return completeString
         return None
 
 
@@ -284,13 +322,19 @@ class CLIShell(basic.LineReceiver, CompleterInterface):
     def __init__(self, prompt=">>> ", banner=None):
         self.prompt = prompt
         self.banner = banner
-        self.__helpCmdHandler = CLICommand("help", "Get information on commands", self.__help,
+        self.__helpCmdHandler = CLICommand("help", "Get information on commands", self.help,
                                            mode = CLICommand.SUBCMD_MODE)
+        self.__batchCmdHandler = CLICommand("batch", "Execute a file with a batch of instructions",
+                                            mode = CLICommand.STANDARD_MODE)
+        self.__batchCmdHandler.configure(1, self.__batch, "Launch [batch_file]", 
+                                         usage = "[batch_file]")
         self.__commands = {}
         self.__registerCommand(self.__helpCmdHandler)
-        self.__registerCommand(CLICommand("quit", "Terminate the shell", self.__quit))
+        self.__registerCommand(self.__batchCmdHandler)
+        self.__registerCommand(CLICommand("quit", "Terminate the shell", self.quit,
+                                          mode=CLICommand.STANDARD_MODE))
         
-    def __help(self, writer, cmd=None):
+    def help(self, writer, cmd=None):
         if cmd:
             if not self.__commands.has_key(cmd):
                 writer("No such command %s\n" % cmd)
@@ -304,10 +348,42 @@ class CLIShell(basic.LineReceiver, CompleterInterface):
                 continue
             for cmdUsageString in  cmdObj.usageHelp():
                 writer("  "+cmdUsageString+"\n")
+                
+    def __runBatchLines(self, writer, batchLines, batchDeferred):
+        while batchLines:
+            line = batchLines.pop(0)
+            writer("[Batch] > %s\n" % line)
+            result, d = self.lineReceived(line)
+            if not result:
+                writer("  Batch failed\n")
+                # even though this failed, we have a successful callback
+                # to the I/O system
+                batchDeferred.callback(True)
+                return
+            if d:
+                d.addCallback(lambda result: self.__runBatchLines(writer, batchLines, batchDeferred))
+                # we need to wait. So return the batch deferred for the 
+                # i/o system to wait on.
+                return batchDeferred
+        writer("Batch Complete\n")
+        batchDeferred.callback(True)
+        # all done. No batch deferred required (return none)
+                
+    def __batch(self, writer, batchFile):
+        if not os.path.exists(batchFile):
+            writer("No such file %s\n"%batchFile)
+            return
+        d = defer.Deferred()
+        with open(batchFile) as f:
+            batchLines = f.readlines()
+            d = self.__runBatchLines(writer, batchLines, d)
+        # d is either the same d as above, or None
+        # if it's d, the I/O system will wait until batch is complete
+        # otherwise, will return immediately
+        return d
             
-    def __quit(self, writer, *args):
+    def quit(self, writer, *args):
         self.transport.loseConnection()
-        reactor.callLater(0, reactor.stop)
         
     def registerCommand(self, cmdHandler):
         if cmdHandler.cmdTxt.startswith("_"):
@@ -319,7 +395,7 @@ class CLIShell(basic.LineReceiver, CompleterInterface):
             raise Exception("Duplicate command handler")
         self.__commands[cmdHandler.cmdTxt] = cmdHandler
         subCommandHelp = CLICommand(cmdHandler.cmdTxt, "Get information about %s" % cmdHandler.cmdTxt,
-                                    lambda writer: self.__help(writer, cmdHandler.cmdTxt))
+                                    lambda writer, *args: self.help(writer, cmdHandler.cmdTxt))
         self.__helpCmdHandler.configureSubcommand(subCommandHelp)
         
     def complete(self, s, state):
@@ -331,26 +407,27 @@ class CLIShell(basic.LineReceiver, CompleterInterface):
     
     def lineReceived(self, line):
         try:
-            self.lineReceivedImpl(line)
+            return self.lineReceivedImpl(line)
         except Exception, e:
             errMsg = traceback.format_exc()
             self.transport.write(errMsg+"\n")
+            return False, None
         #self.transport.write("\n"+self.prompt)
         
     def lineReceivedImpl(self, line):
         line = line.strip()
         if not line:
-            return
-        args = line.split(" ")
+            return (False, None)
+        args = shlex.split(line)
         while '' in args: args.remove('')
         cmd = args[0]
         cmdArgs = args[1:]
         callbackHandler = self.__commands.get(cmd, None)
         if callbackHandler == None:
             self.transport.write("Unknown command %s\n" % cmd)
-            return
+            return (False, None)
         
-        callbackHandler.process(cmdArgs, self.transport.write)
+        return callbackHandler.process(cmdArgs, self.transport.write)
         
 if __name__=="__main__":
     printFilename = lambda writer, fname: writer("Got filename: %s\n" % fname)

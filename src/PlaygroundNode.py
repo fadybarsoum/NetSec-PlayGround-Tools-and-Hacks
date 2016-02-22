@@ -168,19 +168,18 @@ class PlaygroundNode(object):
         self.clientBase.disconnectFromPlaygroundServer(stopReactor=True)
 
 class ScriptTransport(object):
-    def __init__(self, prefix, transport):
-        self.__prefix = str(prefix)
+    def __init__(self, protocol, transport, loseConnectionCB):
+        self.__protocol = protocol
         self.__transport = transport
-        self.__closed = False
+        self.__loseConnectionCB = loseConnectionCB
         
     def write(self, msg):
-        if self.__closed:
-            self.__transport.write(self.__prefix+" <connection closed, return HOME>\n")
-        else:
-            self.__transport.write(self.__prefix + msg)     
+        self.__transport.write(msg)  
         
     def loseConnection(self, *args, **kargs):
-        self.__closed = True
+        self.__protocol.connectionLost()
+        self.__loseConnectionCB()
+        
         
 def PythonModuleCompleter(s, state):
     try:
@@ -226,7 +225,7 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
     delimiter = os.linesep
     
     def __init__(self, node):
-        CLIShell.__init__(self, prompt = "%s > " % node.nodeAddress)
+        CLIShell.__init__(self)
         self.__node = node
         self.__backlog = ""
         launchHandler = CLIShell.CommandHandler("launch", "Launch a script in this playground node",
@@ -240,14 +239,21 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
         interactHandler = CLIShell.CommandHandler("interact", "Launch an interactive process's UI",
                                                   defaultCb=self.__interact,
                                                   defaultArgHandler=self.__interactArgs)
-        launchHandler.argCompleters["_m:"] =PythonModuleCompleter
+        launchHandler.argCompleters["py://"] =PythonModuleCompleter
         self.registerCommand(launchHandler)
         self.registerCommand(listHandler)
         self.registerCommand(stopHandler)
         self.registerCommand(interactHandler)
         self.__loadedModules = {}
         self.__interactiveProtocol = None
+        self.__generatePrompt()
 
+    def __generatePrompt(self):
+        self.prompt = "%s" % self.__node.nodeAddress
+        if self.__interactiveProtocol and isinstance(self.__interactiveProtocol,CLIShell):
+            self.prompt += " " + self.__interactiveProtocol.prompt
+        else:
+            self.prompt += " > "
     
     def __loadScriptArguments(self, writer, *args):
         if len(args) < 1:
@@ -268,7 +274,9 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
         try:
             module = importlib.import_module(moduleName)
         except ImportError, e:
-            writer("\tCannot load script. Import Error: "+str(e)+"\n")
+            errorMessage="\tCannot load script %s. Import Error: " % moduleName
+            errorMessage+=str(e)+"\n"
+            writer(errorMessage)
             self.handleException(e)
             return
         """
@@ -310,9 +318,14 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
         writer("\tAll input will be sent to that script. To return,\n")
         writer("\tenter '_HOME_' at the prompt.\n")
         if uiProtocol.transport == None:
-            scriptTransport = ScriptTransport(scriptName, self.transport)
+            scriptTransport = ScriptTransport(uiProtocol, self.transport, self.__interactiveQuit)
             uiProtocol.makeConnection(scriptTransport)
-        self.__interactiveProtocol = uiProtocol           
+        self.__interactiveProtocol = uiProtocol
+        self.__generatePrompt()    
+        
+    def __interactiveQuit(self):       
+        self.transport.write("Interactive script exiting\n")
+        self.reset(resetInteractivity=True)
     
     def __listRunningScripts(self, writer):
         for scriptName in self.__node.runningScripts.keys():
@@ -383,6 +396,7 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
     def reset(self, resetInteractivity=False):
         if resetInteractivity:
             self.__interactiveProtocol = None
+            self.__generatePrompt()
         if self.__backlog:
             nextBackLog = self.__backlog.pop(0)
             self.lineReceived(nextBackLog)

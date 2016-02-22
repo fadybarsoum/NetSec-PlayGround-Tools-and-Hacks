@@ -9,10 +9,11 @@ from BankMessages import OpenSession, SessionOpen, BalanceRequest, TransferReque
 from BankMessages import BalanceResponse, Receipt, LoginFailure, RequestFailure
 from BankMessages import DepositRequest, CreateAccountRequest, SetUserPasswordRequest, AdminBalanceRequest
 from BankMessages import WithdrawalRequest, WithdrawalResponse, RequestSucceeded, AdminBalanceResponse
-from BankMessages import ListAccounts, ListAccountsResponse, CurrentAccount, CurrentAccountResponse
+from BankMessages import ListAccounts, ListUsers, ListAccountsResponse, CurrentAccount, CurrentAccountResponse
 from BankMessages import SwitchAccount, PermissionDenied, CreateAccountRequest
 from BankMessages import ChangeAccessRequest, CurAccessRequest, CurAccessResponse
-from BankMessages import ServerError
+from BankMessages import ServerError, ListUsersResponse
+from BankMessages import LedgerRequest, LedgerResponse
 from playground.network.message import MessageData
 from playground.network.common import Timer
 from CipherUtil import SHA, X509Certificate, RSA, PKCS1_v1_5
@@ -22,7 +23,6 @@ from playground.playgroundlog import logging, LoggingContext
 from playground.config import LoadOptions
 from playground.error import ErrorHandler
 from PlaygroundNode import PlaygroundNode, StandaloneTask
-from apps.bank.BankMessages import ListAccounts, Receipt, ChangeAccessRequest
 from playground.network.common.MessageHandler import SimpleMessageHandlingProtocol
 logger = logging.getLogger(__file__)
 
@@ -30,9 +30,7 @@ from BankCore import Ledger, LedgerLine
 from contextlib import closing
 
 from twisted.internet import defer
-from twisted.internet.protocol import Protocol as TwistedProtocol
-from twisted.internet import stdio
-from twisted.protocols import basic
+from utils.ui import CLIShell, stdio
 
 RANDOM_u64 = lambda: random.randint(0,(2**64)-1)
 
@@ -74,6 +72,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         self.__bank = bank
         self.registerMessageHandler(OpenSession, self.__handleOpenSession)
         self.registerMessageHandler(ListAccounts, self.__handleListAccounts)
+        self.registerMessageHandler(ListUsers, self.__handleListUsers)
         self.registerMessageHandler(CurrentAccount, self.__handleCurrentAccount)
         self.registerMessageHandler(SwitchAccount, self.__handleSwitchAccount)
         self.registerMessageHandler(BalanceRequest, self.__handleBalanceRequest)
@@ -85,6 +84,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         self.registerMessageHandler(SetUserPasswordRequest, self.__handleSetUserPassword)
         self.registerMessageHandler(ChangeAccessRequest, self.__handleChangeAccess)
         self.registerMessageHandler(CurAccessRequest, self.__handleCurAccess)
+        self.registerMessageHandler(LedgerRequest, self.__handleLedgerRequest)
         self.registerMessageHandler(Close, self.__handleClose)
         
     def __loadMibs(self):
@@ -142,9 +142,9 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             response["ServerNonce"].setData(self.__connData["ServerNonce"])
             response["RequestId"].setData(requestId)
         response["ErrorMessage"].setData(errMsg)
-        self.__state = self.STATE_ERROR
         self.transport.writeMessage(response)
         if fatal:
+            self.__state = self.STATE_ERROR
             self.callLater(1,self.transport.loseConnection)
         return None
     
@@ -268,6 +268,37 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response["RequestId"].setData(msgObj.RequestId)
         response["Accounts"].setData(accountNames)
         self.transport.writeMessage(response)
+        
+    def __handleListUsers(self, protocol, msg):
+        msgObj = msg.data()
+        account, access = self.__getSessionAccount(msgObj)
+        users = []
+        if account == None:
+            return
+        if not hasattr(msgObj,"Account"):
+            # use current account, unless account is not set, in which case
+            # it has to be administrator
+            accountToList = account
+        else:
+            accountToList = msgObj.Account
+            
+        if accountToList == '':
+            adminAccessData = self.__getAdminPermissions(msgObj.RequestId)
+            if adminAccessData == None:
+                # error already reported
+                return None
+            accountToList = None
+        else:
+            accountToListAccess = self.__pwDb.currentAccess(self.__connData["LoginName"], accountToList)
+            if 'a' not in accountToListAccess:
+                return self.__sendPermissionDenied("Requires 'a' access", msgObj.RequestId)
+
+        for name in self.__pwDb.iterateUsers(accountToList):
+            users.append(name)
+        response = self.__createResponse(msgObj, ListUsersResponse)
+        response["RequestId"].setData(msgObj.RequestId)
+        response["Users"].setData(users)
+        self.transport.writeMessage(response)    
         
     def __handleSwitchAccount(self, protocol, msg):
         # permissions: some permissions on account, if an admin account, 'S'
@@ -436,38 +467,53 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             response["bpData"].setData(bpData)
         self.transport.writeMessage(response)
         
+    def __isValidUsername(self, name):
+        for letter in name:
+            if not letter.isalnum() and not letter == "_":
+                return False
+        return True
+        
     def __handleSetUserPassword(self, protocol, msg):
         # requires that the user is changing his own password, or Admin('A') access
         msgObj = msg.data()
         userName = msgObj.loginName
+        newUser = msgObj.NewUser
         errorResponse = self.__createResponse(msgObj, RequestFailure)
         errorResponse["RequestId"].setData(msgObj.RequestId)
         okResponse = self.__createResponse(msgObj, RequestSucceeded)
         okResponse["RequestId"].setData(msgObj.RequestId)
         
-        if (userName != self.__connData["LoginName"]):
+        if (newUser or userName != self.__connData["LoginName"]):
             # if this is a new user, must be admin because couldn't login
             adminAccess = self.__getAdminPermissions(msgObj.RequestId)
             if adminAccess == None:
                 return
             if "A" not in adminAccess:
                 return self.__sendPermissionDenied("Requires 'A' access", msgObj.RequestId)
+            
+            if newUser and self.__pwDb.hasUser(userName):
+                errorResponse["ErrorMessage"].setData("User %s already exists" % userName)
+                self.transport.writeMessage(errorResponse)
+                return
+            elif newUser and not self.__isValidUsername(userName):
+                errorResponse["ErrorMessage"].setData("Username invalid. Only letters, numbers, and underscores.")
+                self.transport.writeMessage(errorResponse)
+                return
+            elif not newUser and not self.__pwDb.has(userName):
+                errorResponse["ErrorMessage"].setData("User %s does not exist" % userName)
+                self.transport.writeMessage(errorResponse)
+                return
         elif msgObj.oldPwHash == '':
             # Cannot allow this.
             errorResponse["ErrorMessage"].setData("No password hash specified")
             self.transport.writeMessage(errorResponse)
             return
-        
-        if msgObj.oldPwHash == '':
-            # either a new user, or an admin change
-            pass
-        else:
-            if self.__pwDb.currentUserPassword(userName) != msgObj.oldPw:
+        elif self.__pwDb.currentUserPassword(userName) != msgObj.oldPw:
                 errorResponse["ErrorMessage"].setData("Invalid Password")
                 self.transport.writeMessage(errorResponse)
                 return
+            
         pwHash = msgObj.newPwHash
-        # we should probably have a field for "new user"... too lazy right now
         self.__pwDb.createUser(userName, pwHash, modify=True)
         self.__pwDb.sync()
         self.transport.writeMessage(okResponse)
@@ -584,6 +630,40 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response["RequestId"].setData(msgObj.RequestId)
         self.transport.writeMessage(response)
 
+    def __handleLedgerRequest(self, protocol, msg):
+        msgObj = msg.data()
+        #account, access = self.__getSessionAccount(msgObj)
+        userName = self.__connData["LoginName"]
+        accountToGet = hasattr(msgObj,"Account") and msgObj.Account or None
+        if not accountToGet:
+            # No account specified. Get the entire bank ledger.
+            # this is administrative access only.
+            adminAccess = self.__getAdminPermissions(msgObj.RequestId)
+            if adminAccess == None:
+                return
+            if 'A' not in adminAccess:
+                return self.__sendPermissionDenied("Requires admin access", 
+                                                   msgObj.RequestId)
+            # return all lines
+            lFilter = lambda lline: True
+        else:
+            accountToGetAccess = self.__pwDb.currentAccess(userName, accountToGet) 
+            if 'a' not in accountToGetAccess:
+                # don't kill the connection if we don't have admin. Just tell them.
+                adminAccess = self.__getAdminPermissions(msgObj.RequestId, fatal=False)
+                if adminAccess == None or 'A' not in adminAccess:
+                    return self.__sendPermissionDenied("Requires admin access or regular 'a'", 
+                                                       msgObj.RequestId)
+            lFilter = lambda lline: lline.partOfTransaction(accountToGet)
+        lineNums = self.__bank.searchLedger(lFilter)
+        lines = []
+        for lineNum in lineNums:
+            line = self.__bank.getLedgerLine(lineNum)
+            lines.append(line.toHumanReadableString(accountToGet))
+        response = self.__createResponse(msgObj, LedgerResponse)
+        response["RequestId"].setData(msgObj.RequestId)
+        response["Lines"].setData(lines)
+        self.transport.writeMessage(response)
             
     def __handleClose(self, protocol, msg):
         msgObj = msg.data()
@@ -626,6 +706,8 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
         self.registerMessageHandler(RequestSucceeded, self.__handleStdSessionResponse)
         self.registerMessageHandler(PermissionDenied, self.__handleRequestFailure)
         self.registerMessageHandler(ListAccountsResponse, self.__handleStdSessionResponse)
+        self.registerMessageHandler(ListUsersResponse, self.__handleStdSessionResponse)
+        self.registerMessageHandler(LedgerResponse, self.__handleStdSessionResponse)
         self.registerMessageHandler(ServerError, self.__handleServerError)
         
     def __errorCallbackWrapper(self, e, d):
@@ -778,6 +860,15 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
         self.transport.writeMessage(listMsg)
         return d
     
+    def listUsers(self, account=None):
+        if self.__state != self.STATE_OPEN:
+            return self.__reportExceptionAsDeferred(Exception("Cannot login. State: %s" % self.__state))
+        listMsg, d = self.__createStdSessionRequest(ListUsers)
+        if account:
+            listMsg["Account"].setData(account)
+        self.transport.writeMessage(listMsg)
+        return d
+    
     def switchAccount(self, accountName):
         if self.__state != self.STATE_OPEN:
             return self.__reportExceptionAsDeferred(Exception("Cannot login. State: %s" % self.__state))
@@ -871,6 +962,7 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
         createMsg["loginName"].setData(loginName)
         createMsg["oldPwHash"].setData('')
         createMsg["newPwHash"].setData(PasswordHash(password))
+        createMsg["NewUser"].setData(True)
         self.transport.writeMessage(createMsg)
         return d
     
@@ -893,6 +985,7 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
             changeMsg["oldPwHash"].setData(PasswordHash(oldPassword))
         else: changeMsg["oldPwHash"].setData("")
         changeMsg["newPwHash"].setData(PasswordHash(newPassword))
+        changeMsg["NewUser"].setData(False)
         self.transport.writeMessage(changeMsg)
         return d
     
@@ -906,6 +999,56 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
             changeMsg["Account"].setData(account)
         self.transport.writeMessage(changeMsg)
         return d
+    
+    def exportLedger(self, account):
+        if self.state() != self.STATE_OPEN:
+            return self.__reportExceptionAsDeferred(Exception("Cannot login. State: %s" % self.__state))
+        ledgerMsg, d = self.__createStdSessionRequest(LedgerRequest)
+        if account:
+            ledgerMsg["Account"].setData(account)
+        self.transport.writeMessage(ledgerMsg)
+        return d
+    
+class BankClientSimpleCommand(object):
+    def __init__(self):
+        pass
+    
+    def __failed(self, final_d, protocol, errMsg):
+        protocol.close()
+        final_d.errback(Exception(errMsg))
+    
+    def __cmdSucceeded(self, final_d, protocol, result ):
+        protocol.close()
+        final_d.callback(result)
+    
+    def __switchAccountSucceeded(self, cmdState):
+        protocol, account, cmd, args, kargs, final_d = cmdState
+        d = cmd(protocol, *args, **kargs)
+        d.addCallback(lambda result: self.__cmdSucceeded(final_d, protocol, result))
+        d.addErrback(lambda failure: self.__failed(final_d, protocol,
+                                                   "Could not execute bank command. Reason: %s" % str(failure)))
+    
+    def __loginSucceeded(self, cmdState):
+        protocol, account, cmd, args, kargs, final_d = cmdState
+        if account:
+            d = protocol.switchAccount(account)
+            d.addCallback(lambda result: self.__switchAccountSucceeded(cmdState))
+            d.addErrback(lambda failure: self.__failed(final_d, protocol,  
+                                                       "Could not switch to account %s. Reason: %s" % (account, str(failure))))
+        else:
+            d = cmd(protocol, *args, **kargs)
+            d.addCallback(lambda result: self.__cmdSucceeded(final_d, result))
+            d.addErrback(lambda failure: self.__failed(final_d, protocol, 
+                                                       "Could not execute bank command. Reason: %s" % str(failure)))
+    
+    def __call__(self, protocol, account, cmd, *args, **kargs):
+        final_d = defer.Deferred()
+        cmdState = [protocol, account, cmd, args, kargs, final_d]
+        d = protocol.loginToServer()
+        d.addCallback(lambda result: self.__loginSucceeded(cmdState))
+        d.addErrback(lambda failure: self.__failed(final_d, protocol, 
+                                                   "Could not login to bank. Reason: %s" % str(failure)))
+        return final_d
         
 class PlaygroundOnlineBank(playground.network.client.ClientApplicationServer.ClientApplicationServer):
     MIB_BALANCES = "BankBalances"
@@ -947,10 +1090,12 @@ class PlaygroundOnlineBankClient(playground.network.client.ClientApplicationServ
     def buildProtocol(self, addr):
         return BankClientProtocol(self, addr, self._cert, self._loginName, self._pw)
 
-class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
-    from os import linesep as delimiter
-    
+class AdminBankCLIClient(CLIShell, ErrorHandler):
+    NON_ADMIN_PROMPT = "Bank Client >"
+    ADMIN_PROMPT = "Bank Client [Admin] >"
+
     def __init__(self, clientBase, bankClientFactory, bankAddr, connectionType):
+        CLIShell.__init__(self, prompt=self.NON_ADMIN_PROMPT)
         self.__d = None
         self.__backlog = []
         self.__bankClient = None
@@ -958,7 +1103,9 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
         self.__bankClientFactory = bankClientFactory
         self.__connectionType = connectionType
         self.__clientBase = clientBase
+        self.__connected = False
         self.__admin = False
+        self.__quitCalled = False
         
     def __loginToServer(self, success):
         if not success:
@@ -968,31 +1115,41 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
         self.__d.addErrback(self.__noLogin)
         
     def __login(self, success):
+        self.__connected = True
         self.reset()
+        self.__loadCommands()
+        self.transport.write("Logged in to bank\n")
         
     def __noLogin(self, e):
         self.transport.write("Failed to login to bank: %s\n" % str(e))
         self.transport.write("Quiting")
-        Timer.callLater(.1, self.__quit)
+        Timer.callLater(.1, self.quit)
         
-    def __listAccounts(self, msgObj):
-        self.transport.write("\tCurrent Accounts")
+    def __listAccountsResponse(self, msgObj):
+        responseTxt = "  CurrentAccounts\n"
         for account in msgObj.Accounts:
-            self.transport.write("\t\t"+account+"\n")
-        self.transport.write("\n\n>")
+            responseTxt += "    "+account+"\n"
+        self.transport.write(responseTxt+"\n")
+        self.reset()
+        
+    def __listUsersResponse(self, msgObj):
+        responseTxt = "  CurrentUsers\n"
+        for user in msgObj.Users:
+            responseTxt += "    "+user+"\n"
+        self.transport.write(responseTxt+"\n")
         self.reset()
         
     def __currentAccount(self, msgObj):
         if msgObj.Account:
-            self.transport.write("\tYou are currently logged into account " + msgObj.Account)
+            self.transport.write("  You are currently logged into account " + msgObj.Account)
         else:
-            self.transport.write("\tYou are not logged into an account")
-        self.transport.write("\n\n>")
+            self.transport.write("  You are not logged into an account")
+        self.transport.write("\n")
         self.reset()
         
     def __switchAccount(self, msgObj):
-        self.transport.write("\tSuccessfully logged into account.")
-        self.transport.write("\n\n>")
+        self.transport.write("  Successfully logged into account.")
+        self.transport.write("\n")
         self.reset()
     
     def __balances(self, msgObj):
@@ -1000,35 +1157,35 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
         if len(accounts) != len(balances):
             self.transport.write("Inernal Error. Got %d accounts but %d balances\n" % (len(accounts), len(balances)))
             return
-        self.transport.write("\tCurrent Balances:\n")
+        responseTxt = ""
+        responseTxt += "  Current Balances:\n"
         for i in range(len(accounts)):
-            self.transport.write("\t\t%s: %d\n" % (accounts[i],balances[i]))
-        self.transport.write("\n\n>")
+            responseTxt += "    %s: %d\n" % (accounts[i],balances[i])
+        self.transport.write(responseTxt + "\n")
         self.reset()
         
     def __curAccess(self, msgObj):
         accounts, access = msgObj.Accounts, msgObj.Access
         if len(accounts) != len(access):
-            self.transport.write("Inernal Error. Got %d accounts but %d access\n" % (len(accounts), len(access)))
+            self.transport.write("  Inernal Error. Got %d accounts but %d access\n" % (len(accounts), len(access)))
             return
-        self.transport.write("\tCurrent Access:\n")
+        responseTxt = "  Current Access:\n"
         for i in range(len(accounts)):
-            self.transport.write("\t\t%s: %s\n" % (accounts[i], access[i]))
-        self.transport.write("\n\n>")
+            responseTxt += "    %s: %s\n" % (accounts[i], access[i])
+        self.transport.write(responseTxt + "\n")
         self.reset()               
         
-    def __accountBalance(self, msgObj):
+    def __accountBalanceResponse(self, msgObj):
         result = msgObj.Balance
         self.transport.write("Current account balance: %d\n" % result)
-        self.transport.write("\n\n")
         self.reset()
         
     def __withdrawl(self, msgObj):
         result = msgObj.bpData
         filename = "bp"+str(time.time())
         open(filename,"wb").write(result)
-        self.transport.write("\tWithdrew bitpoints into file %s" % filename)
-        self.transport.write("\n\n>")
+        self.transport.write("  Withdrew bitpoints into file %s" % filename)
+        self.transport.write("\n")
         self.reset()
         
     def __receipt(self, msgObj):
@@ -1040,63 +1197,71 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
         with open(sigFile, "wb") as f:
             f.write(msgObj.ReceiptSignature)
         if not self.__bankClient.verify(msgObj.Receipt, msgObj.ReceiptSignature):
-            self.transport.write("Received a receipt with mismatching signature\n")
-            self.transport.write("Please report this to the bank administrator\n")
-            self.transport.write("Quitting\n")
-            self.__quit()
+            responseTxt = "Received a receipt with mismatching signature\n"
+            responseTxt += "Please report this to the bank administrator\n"
+            responseTxt += "Quitting\n"
+            self.trasnport.write(responseTxt)
+            self.quit()
         else:
             self.transport.write("Valid receipt received. Transaction complete.")
-            self.transport.write("\n\n>")
+            self.transport.write("\n")
             self.reset()
         
     def __createAccount(self, result):
-        self.transport.write("\tAccount created.\n")
-        self.transport.write("\n\n>")
+        self.transport.write("  Account created.")
+        self.transport.write("\n")
         self.reset()
         
     def __createUser(self, result):
-        self.transport.write("\tUser created.\n")
-        self.transport.write("\n\n>")
+        self.transport.write("  User created.")
+        self.transport.write("\n")
         self.reset()
         
     def __changePassword(self, result):
-        self.transport.write("\tPassword changed successfully.\n")
-        self.transport.write("\n\n>")
+        self.transport.write("  Password changed successfully.")
+        self.transport.write("\n")
         self.reset()
         
     def __changeAccess(self, result):
-        self.transport.write("\tAccess changed successfully.\n")
-        self.transport.write("\n\n>")
+        self.transport.write("  Access changed successfully.")
+        self.transport.write("\n")
+        self.reset()
+        
+    def __exportLedgerResponse(self, msgObj):
+        filename = "ledger_%f" % time.time()
+        self.transport.write("  Exported ledger downloaded.\n")
+        self.transport.write("  Saving to file %s\n" % filename)
+        with open(filename,"w+") as f:
+            for line in msgObj.Lines:
+                f.write(line+"\n")
+        self.transport.write("  Done.\n")
         self.reset()
         
     def __failed(self, e):
-        self.transport.write("\tOperation failed. Reason: %s\n" % str(e))
-        self.transport.write("\n\n>")
+        self.transport.write("  Operation failed. Reason: %s\n" % str(e))
         self.reset()
         
     def handleError(self, message, reporter=None, stackHack=0):
         self.transport.write("Client Error: %s\n" % message)
         
-    def __quit(self):
-        self.transport.write("Exiting.\n")
-        Timer.callLater(1, self.__clientBase.disconnectFromPlaygroundServer)
+    def quit(self, writer=None):
+        self.__bankClient.close()
+        if self.__quitCalled: return
+        self.__quitCalled = True
+        self.transport.write("Exiting bank client.\n")
+        Timer.callLater(0, self.transport.loseConnection)
+        Timer.callLater(.1, self.__clientBase.disconnectFromPlaygroundServer)
     
     def handleException(self, e, reporter=None, stackHack=0, fatal=False):
         errMsg = traceback.format_exc()
         self.handleError(errMsg)
         if fatal:
-            self.__quit()
+            self.quit()
         
     def reset(self):
         self.__d = None
-        if self.__backlog:
-            nextBackLog = self.__backlog.pop(0)
-            self.lineReceived(nextBackLog)
-        else:
-            self.transport.write(">>> ")
 
     def connectionMade(self):
-        print "connection made in bank cli"
         try:
             srcPort, self.__bankClient = self.__clientBase.connect(self.__bankClientFactory, 
                                                           self.__bankAddr,
@@ -1105,232 +1270,292 @@ class AdminBankCLIClient(basic.LineReceiver, ErrorHandler):
                                                           
             self.__bankClient.setLocalErrorHandler(self)
             self.__d = self.__bankClient.waitForConnection()#self.__bankClient.loginToServer()
-            self.__bankClient.waitForTermination().addCallback(lambda *args: self.__quit())
+            self.__bankClient.waitForTermination().addCallback(lambda *args: self.quit())
             self.__d.addCallback(self.__loginToServer)
             self.__d.addErrback(self.__noLogin)
-            print "waiting for server"
+            self.transport.write("Logging in to bank. Waiting for server\n")
         except Exception, e:
             print e
             self.transport.loseConnection()
 
     def lineReceived(self, line):
+        if self.__d:
+            if line.strip().lower() == "__break__":
+                self.__d = None
+                self.transport.write("Operation cancelled on client. Unknown server state.\n")
+            elif not self.__connected:
+                self.transport.write("Still waiting for bank to login. Retry command later.\n")
+            else:
+                self.transport.write("Cannot execute [%s]. Waiting for previous command to complete\n"%line)
+                self.transport.write("Type: __break__ to return to shell (undefined behavior).\n")
+            return (False, None)
         try:
-            self.__lineReceivedImpl(line)
+            self.lineReceivedImpl(line)
+            return (True, self.__d)
         except Exception, e:
             self.handleException(e)
+            return (False, None)
             
-    def __lineReceivedImpl(self, line):
-        print "received line", line
-        bankClient = self.__bankClient
-        if self.__d:
-            self.__backlog.append(line)
-            return
-        line = line.strip()
-        lineParts = line.split(" ")
-        if len(lineParts) > 0:
-            cmd, args = lineParts[0], lineParts[1:]
-            if cmd == "admin":
-                self.__admin = not self.__admin
-                return self.reset()
-            elif cmd == "access":
-                if len(args) < 1:
-                    self.transport.write("Requires sub command [current] or [set]\n")
-                    return self.reset()
-                subcmd = args.pop(0)
-                if subcmd == "current":
-                    if len(args) == 0:
-                        user = None
-                        account = None
-                    elif len(args) == 1 and self.__admin:
-                        # in admin mode, one arg is the user (get all account access)
-                        user = args[0]
-                        account = None
-                    elif len(args) == 1 and not self.__admin:
-                        # in non-admin, one arg is the account (get my access in account)
-                        user = None
-                        account = args[0]
-                    elif len(args) == 2:
-                        user = args[0]
-                        account = args[1]
-                    else:
-                        self.transport.write("Requires no args, a user, or a user and account\n")
-                    
-                    self.__d = bankClient.currentAccess(user, account)
-                    self.__d.addCallback(self.__curAccess)
-                    self.__d.addErrback(self.__failed)
-                elif subcmd == "set":
-                    if len(args) < 2 or len(args) > 3:
-                        self.transport.write("Requires username access [account]\n")
-                        return self.reset()
-                    user, accessStr = args[:2]
-                    if len(args) == 3: account = args[2]
-                    else: account = None
-                    if accessStr == "*":
-                        accessStr = PasswordData.ACCOUNT_PRIVILEGES
-                    if accessStr == "__none__":
-                        accessStr = ''
-                    self.__d = bankClient.changeAccess(user, accessStr, account)
-                    self.__d.addCallback(self.__changeAccess)
-                    self.__d.addErrback(self.__failed)
-                else:
-                    self.transport.write("Unknown subcmd %s\n" % subcmd)
-                    return self.reset()
-            elif cmd == "list_accounts":
-                if len(args) == 1:
-                    if not self.__admin:
-                        self.transport.write("Not in admin mode\n")
-                        return self.reset()
-                    user = args[0]
-                elif len(args) == 0: user = None
-                else: 
-                    if self.__admin:
-                        self.transport.write("Requires no args (for current user) or a user name\n")
-                    else:
-                        self.transport.write("Takes no arguments\n")
-                    return self.reset()
-                self.__d = bankClient.listAccounts(user)
-                self.__d.addCallback(self.__listAccounts)
-                self.__d.addErrback(self.__failed)
-            elif cmd == "switch":
-                if len(args) != 1:
-                    self.transport.write("Requires an account name\n")
-                    return self.reset()
-                switchToAccount = args[0]
-                if switchToAccount == "__none__":
-                    switchToAccount = ''
-                self.__d = bankClient.switchAccount(switchToAccount)
-                self.__d.addCallback(self.__switchAccount)
-                self.__d.addErrback(self.__failed)
-            elif cmd == "balance":
-                if len(args) == 0:
-                    self.__d = bankClient.getBalance()
-                    self.__d.addCallback(self.__accountBalance)
-                    self.__d.addErrback(self.__failed)
-                elif len(args) == 1 and args[0] == "all":
-                    if not self.__admin:
-                        self.transport.write("Not in admin mode\n")
-                        return self.reset()
-                    self.__d = bankClient.adminGetBalances()
-                    self.__d.addCallback(self.__balances)
-                    self.__d.addErrback(self.__failed)
-                else:
-                    self.transport.write("No arguments expected or argument 'all' to list all balances (admin only)\n")
-                    return self.reset()
-            elif cmd == "deposit":
-                #if not self.__admin:
-                #    self.transport.write("Not in admin mode\n")
-                #    return self.reset()
-                if len(args) != 1:
-                    self.transport.write("Expected filename\n")
-                    return self.reset()
-                bpFile = args[0]
-                if not os.path.exists(bpFile):
-                    self.transport.write("NO such file\n")
-                    return self.reset()
-                with open(bpFile) as f:
-                    bpData = f.read()
-                    self.__d = bankClient.deposit(bpData)
-                    self.__d.addCallback(self.__receipt)
-                    self.__d.addErrback(self.__failed)
-            elif cmd == "withdraw":
-                if len(args) != 1:
-                    self.transport.write("Expected amount\n")
-                    return self.reset()
-                try:
-                    amount = int(args[0])
-                except:
-                    self.transport.write("Not a valid amount %s\n" % args[0])
-                    return self.reset()
-                self.__d = bankClient.withdraw(amount)
-                self.__d.addCallback(self.__withdrawl)
-                self.__d.addErrback(self.__failed)
-            elif cmd == "transfer":
-                if len(args) != 3:
-                    self.transport.write("Requires a destination account, amount, and memo\n")
-                    return self.reset()
-                dstAcct, amount, memo = args
-                try:
-                    amount = int(amount)
-                except Exception, e:
-                    self.transport.write("Can't convert amount to int\n")
-                    return self.reset()
-                self.__d = bankClient.transfer(dstAcct, amount, memo)
-                self.__d.addCallback(self.__receipt)
-                self.__d.addErrback(self.__failed)
-            elif cmd == "account":
-                if len(args) == 0:
-                    self.transport.write("Requires at least one more argument\n")
-                    return self.reset()
-                subcmd = args.pop(0)
-                if subcmd == "current":
-                    self.__d = bankClient.currentAccount()
-                    self.__d.addCallback(self.__currentAccount)
-                    self.__d.addErrback(self.__failed)
-                elif subcmd == "create":
-                    if not self.__admin:
-                        self.transport.write("Not in admin mode\n")
-                        return self.reset()
-                    if len(args) != 1:
-                        self.transport.write("Requires a name for new account\n")
-                        return self.reset()
-                    self.__d = bankClient.adminCreateAccount(args[0])
-                    self.__d.addCallback(self.__createAccount)
-                    self.__d.addErrback(self.__failed)
-                else:
-                    self.transport.write("No arguments expected or argument 'all' to list all balances (admin only)\n")
-                    return self.reset()
-            elif cmd == "user":
-                if len(args) == 0:
-                    self.transport.write("Requires at least one more argument\n")
-                    return self.reset()
-                subcmd = args.pop(0)
-                if subcmd == "create":
-                    if not self.__admin:
-                        self.transport.write("Not in admin mode\n")
-                        return self.reset()
-                    if len(args) != 1:
-                        self.transport.write("Requires a login name\n")
-                        return self.reset()
-                    loginName = args[0]
-                    password = getpass.getpass("Enter account password: ")
-                    password2 = getpass.getpass("Re-enter account password: ")
-                    if password != password2:
-                        self.transport.write("Mismatching passwords\n")
-                        return self.reset()
-                    self.__d = bankClient.adminCreateUser(loginName, password)
-                    self.__d.addCallback(self.__createAccount)
-                    self.__d.addErrback(self.__failed)
-                elif subcmd == "passwd":
-                    if len(args) == 0:
-                        loginName = None
-                        oldPassword = getpass.getpass("Enter current account password: ")
-                    elif len(args) == 1:
-                        if not self.__admin:
-                            self.transport.write("Not in admin mode\n")
-                            return self.reset()
-                        loginName = args[0]
-                        self.transport.write("Login name specified as [%s]. This requires Admin access\n"%loginName)
-                        oldPassword = None
-                    password2 = getpass.getpass("Enter new account password: ")
-                    password3 = getpass.getpass("Re-enter new account password: ")
-                    if password2 != password3:
-                        self.transport.write("Mismatching passwords\n")
-                        return self.reset()
-                    self.__d = bankClient.changePassword(password2, loginName=loginName, oldPassword=oldPassword)
-                    self.__d.addCallback(self.__changePassword)
-                    self.__d.addErrback(self.__failed)
-                else:
-                    self.transport.write("No arguments expected or argument 'all' to list all balances (admin only)\n")
-                    return self.reset()
-            elif cmd == "quit":
-                bankClient.close()
-                self.transport.loseConnection()
-                self.__quit()
-            else:
-                self.transport.write("Unknown command\n")
-                self.reset()
+    def __toggleAdmin(self, writer):
+        self.__admin = not self.__admin
+        if self.__admin:
+            self.prompt = self.ADMIN_PROMPT
+        else: self.prompt = self.NON_ADMIN_PROMPT
+        
+    def __accessCurrent(self, writer, arg1=None, arg2=None):
+        if not arg1 and not arg2:
+            user = None
+            account = None
+        elif arg1 and not arg2:
+            if self.__admin:
+                # in admin mode, one arg is the user (get all account access)
+                user = arg1
+                account = None
+            elif not self.__admin:
+                # in non-admin, one arg is the account (get my access in account)
+                user = None
+                account = arg1
         else:
-            self.reset()
+            user = arg1
+            account = arg2
+
+                    
+        self.__d = self.__bankClient.currentAccess(user, account)
+        self.__d.addCallback(self.__curAccess)
+        self.__d.addErrback(self.__failed)
+        
+    def __accessSet(self, writer, user, access, account=None):
+        if access == "*":
+            access = PasswordData.ACCOUNT_PRIVILEGES
+        if access == "__none__":
+            access = ''
+        self.__d = self.__bankClient.changeAccess(user, access, account)
+        self.__d.addCallback(self.__changeAccess)
+        self.__d.addErrback(self.__failed)
+        
+    def __listAccounts(self, writer, user=None):
+        if user and not self.__admin:
+            writer("Not in admin mode\n")
+            return
+        self.__d = self.__bankClient.listAccounts(user)
+        self.__d.addCallback(self.__listAccountsResponse)
+        self.__d.addErrback(self.__failed)
+        
+    def __listUsers(self, writer, account=None):
+        self.__d = self.__bankClient.listUsers(account)
+        self.__d.addCallback(self.__listUsersResponse)
+        self.__d.addErrback(self.__failed)
+        
+    def __accountCurrent(self, writer):
+        self.__d = self.__bankClient.currentAccount()
+        self.__d.addCallback(self.__currentAccount)
+        self.__d.addErrback(self.__failed)
+        
+    def __accountSwitch(self, writer, switchToAccount):
+        if switchToAccount == "__none__":
+            switchToAccount = ''
+        self.__d = self.__bankClient.switchAccount(switchToAccount)
+        self.__d.addCallback(self.__switchAccount)
+        self.__d.addErrback(self.__failed)
+        
+    def __accountBalance(self, writer, all=False):
+        if not all:
+            self.__d = self.__bankClient.getBalance()
+            self.__d.addCallback(self.__accountBalanceResponse)
+            self.__d.addErrback(self.__failed)
+        else:
+            if not self.__admin:
+                writer("Not in admin mode\n")
+                return
+            self.__d = self.__bankClient.adminGetBalances()
+            self.__d.addCallback(self.__balances)
+            self.__d.addErrback(self.__failed)
+            
+    def __accountDeposit(self, writer, bpFile):
+        if not os.path.exists(bpFile):
+            writer("NO such file\n")
+            return
+        with open(bpFile) as f:
+            bpData = f.read()
+            self.__d = self.__bankClient.deposit(bpData)
+            self.__d.addCallback(self.__receipt)
+            self.__d.addErrback(self.__failed)
+            
+    def __accountWithdrawArgsHandler(self, writer, amountStr):
+        try:
+            amount = int(amountStr)
+        except:
+            writer("Not a valid amount %s\n" % amountStr)
+            return None
+        if amount < 1:
+            writer("Amount cannot be less than 1\n")
+            return None
+        return (amount,)
+            
+    def __accountWithdraw(self, writer, amount):
+        self.__d = self.__bankClient.withdraw(amount)
+        self.__d.addCallback(self.__withdrawl)
+        self.__d.addErrback(self.__failed)
+        
+    def __accountTransferArgsHandler(self, writer, dst, amountStr, memo):
+        try:
+            amount = int(amountStr)
+        except:
+            writer("Invalid amount %s" % amountStr)
+            return None
+        if amount < 1:
+            writer("Amount cannot be less than 1\n")
+            return None
+        return (dst, amount, memo)
+        
+    def __accountTransfer(self, writer, dstAcct, amount, memo):
+        self.__d = self.__bankClient.transfer(dstAcct, amount, memo)
+        self.__d.addCallback(self.__receipt)
+        self.__d.addErrback(self.__failed)
+        
+    def __accountCreate(self, writer, accountName):
+        if not self.__admin:
+            writer("Not in admin mode\n")
+            return
+        self.__d = self.__bankClient.adminCreateAccount(accountName)
+        self.__d.addCallback(self.__createAccount)
+        self.__d.addErrback(self.__failed)
+        
+    def __userCreate(self, writer, userName):
+        if not self.__admin:
+            writer("Not in admin mode\n")
+            return
+        password = getpass.getpass("Enter account password for [%s]: " % userName)
+        password2 = getpass.getpass("Re-enter account password for [%s]: " % userName)
+        if password != password2:
+            self.transport.write("Mismatching passwords\n")
+            return
+        self.__d = self.__bankClient.adminCreateUser(userName, password)
+        self.__d.addCallback(self.__createAccount)
+        self.__d.addErrback(self.__failed)
+        
+    def __userPasswd(self, writer, userName=None):
+        if userName:
+            oldPassword = getpass.getpass("Enter current account password: ")
+        else:
+            if not self.__admin:
+                writer("Not in admin mode\n")
+                return 
+            writer("Login name specified as [%s]. This requires Admin access\n"%userName)
+            oldPassword = None
+        password2 = getpass.getpass("Enter new account password: ")
+        password3 = getpass.getpass("Re-enter new account password: ")
+        if password2 != password3:
+            writer("Mismatching passwords\n")
+            return
+        self.__d = self.__bankClient.changePassword(password2, loginName=userName, oldPassword=oldPassword)
+        self.__d.addCallback(self.__changePassword)
+        self.__d.addErrback(self.__failed)
+        
+    def __exportLedger(self, writer, account=None):
+        if not account and not self.__admin:
+            writer("Not in admin mode.\n")
+            return
+        self.__d = self.__bankClient.exportLedger(account)
+        self.__d.addCallback(self.__exportLedgerResponse)
+        self.__d.addErrback(self.__failed)
+        
+    def __loadCommands(self):
+        adminCommandHandler = CLIShell.CommandHandler("admin","Toggle admin mode",self.__toggleAdmin)
+        accessCommandHandler = CLIShell.CommandHandler("access","Configure access right",
+                                                       mode=CLIShell.CommandHandler.SUBCMD_MODE)
+        accessCurrentHandler = CLIShell.CommandHandler("current",
+                                                        "Get the current access for a user/account",
+                                                        mode=CLIShell.CommandHandler.STANDARD_MODE,
+                                                        defaultCb=self.__accessCurrent)
+        accessCurrentHandler.configure(1, self.__accessCurrent, usage="[user/account]",
+                                       helpTxt="Get the access of the user or account depending on admin mode.")
+        accessCurrentHandler.configure(2, self.__accessCurrent, usage="[user] [account]",
+                                       helpTxt="Get the access of the user/account pair")
+        accessCommandHandler.configureSubcommand(accessCurrentHandler)
+        accessSetHandler = CLIShell.CommandHandler("set",helpTxt="Set access for a user",
+                                                   mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accessSetHandler.configure(2, self.__accessSet, usage="[username] [access]",
+                                   helpTxt="Set the access for username on current account")
+        accessSetHandler.configure(3, self.__accessSet, usage="[username] [access] [account]",
+                                   helpTxt="Set the access for username on account")
+        accessCommandHandler.configureSubcommand(accessSetHandler)
+        accountHandler = CLIShell.CommandHandler("account",helpTxt="Commands related to an account",
+                                                 mode=CLIShell.CommandHandler.SUBCMD_MODE)
+        accountListHandler = CLIShell.CommandHandler("list",helpTxt="List accounts for current user",
+                                                     defaultCb=self.__listAccounts,
+                                                     mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accountListHandler.configure(1, self.__listAccounts, helpTxt="Admin: List accounts for a specific user",
+                                    usage="[user]")
+        accountHandler.configureSubcommand(accountListHandler)
+        accountCurrentHandler = CLIShell.CommandHandler("current",helpTxt="Get the current account name",
+                                                        defaultCb=self.__accountCurrent)
+        accountHandler.configureSubcommand(accountCurrentHandler)
+        accountSwitchHandler = CLIShell.CommandHandler("switch",helpTxt="Switch the current account",
+                                                       mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accountSwitchHandler.configure(1, self.__accountSwitch, "Switch to [account name]",
+                                       usage="[account name]")
+        accountHandler.configureSubcommand(accountSwitchHandler)
+        accountBalanceHandler = CLIShell.CommandHandler("balance",helpTxt="Get the current account balance",
+                                                        defaultCb=self.__accountBalance,
+                                                        mode=CLIShell.CommandHandler.SUBCMD_MODE)
+        accountBalanceAllHandler = CLIShell.CommandHandler("all",helpTxt="Admin: Get ALL balances",
+                                                           defaultCb=lambda writer: self.__accountBalance(writer, True),
+                                                           mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accountBalanceHandler.configureSubcommand(accountBalanceAllHandler)
+        accountHandler.configureSubcommand(accountBalanceHandler)
+        accountDepositHandler = CLIShell.CommandHandler("deposit",helpTxt="Deposit bitpoints",
+                                                        mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accountDepositHandler.configure(1, self.__accountDeposit, "Deposit a file of bitpoints",
+                                        usage="[bp file]")
+        accountHandler.configureSubcommand(accountDepositHandler)
+        accountWithdrawHandler = CLIShell.CommandHandler("withdraw",helpTxt="Withdraw bitpoints",
+                                                        mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accountWithdrawHandler.configure(1, self.__accountWithdraw, "Withdraw an amount of bitpoints",
+                                         argHandler=self.__accountWithdrawArgsHandler,
+                                        usage="[amount]")
+        accountHandler.configureSubcommand(accountWithdrawHandler)
+        accountTransferHandler = CLIShell.CommandHandler("transfer",helpTxt="Transfer funds to another account",
+                                                         mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accountTransferHandler.configure(3, self.__accountTransfer, "Transfer amount to dst with memo",
+                                         argHandler=self.__accountTransferArgsHandler,
+                                         usage="[dst] [amount] [memo]")
+        accountHandler.configureSubcommand(accountTransferHandler)
+        accountCreateHandler = CLIShell.CommandHandler("create",helpTxt="Admin: create new account",
+                                                       mode=CLIShell.CommandHandler.STANDARD_MODE)
+        accountCreateHandler.configure(1, self.__accountCreate, "Create account named [account name]",
+                                       usage="[account name]")
+        accountHandler.configureSubcommand(accountCreateHandler)
+        userHandler = CLIShell.CommandHandler("user",helpTxt="Manage user(s)",
+                                              mode = CLIShell.CommandHandler.SUBCMD_MODE)
+        userListHandler = CLIShell.CommandHandler("list",helpTxt="List all users for the current account",
+                                                  defaultCb=self.__listUsers,
+                                                  mode=CLIShell.CommandHandler.STANDARD_MODE)
+        userListHandler.configure(1, self.__listUsers, helpTxt="List the users with access to [account]",
+                                  usage="[account]")
+        userHandler.configureSubcommand(userListHandler)
+        userCreateHandler = CLIShell.CommandHandler("create",helpTxt="Admin: create a new user",
+                                                    mode=CLIShell.CommandHandler.STANDARD_MODE)
+        userCreateHandler.configure(1, self.__userCreate, helpTxt="Admin: create user [username]",
+                                    usage="[username]")
+        userHandler.configureSubcommand(userCreateHandler)
+        userPasswdHandler = CLIShell.CommandHandler("passwd",helpTxt="Set password",
+                                                    defaultCb=self.__userPasswd,
+                                                    mode=CLIShell.CommandHandler.STANDARD_MODE)
+        userPasswdHandler.configure(1, self.__userPasswd, helpTxt="Admin: Set the password for user",
+                                    usage="[user]")
+        userHandler.configureSubcommand(userPasswdHandler)
+        exportCommandHandler = CLIShell.CommandHandler("export",helpTxt="[Admin] Export the entire ledger",
+                                                       defaultCb=self.__exportLedger,
+                                                       mode=CLIShell.CommandHandler.STANDARD_MODE)
+        exportCommandHandler.configure(1, self.__exportLedger, helpTxt="Export ledger for a specific acocunt", 
+                                       usage="[account]")
+        self.registerCommand(adminCommandHandler)
+        self.registerCommand(accessCommandHandler)
+        self.registerCommand(accountHandler)
+        self.registerCommand(userHandler)
+        self.registerCommand(exportCommandHandler)
+        
             
 class PlaygroundNodeControl(object):
     Name = "OnlineBank"
@@ -1492,8 +1717,12 @@ class PasswordData(object):
     def iterateAccounts(self):
         return self.__tmpAccountTable.iterkeys()
     
-    def iterateUsers(self):
-        return self.__tmpPwTable.iterkeys()
+    def iterateUsers(self, account=None):
+        if not account:
+            return self.__tmpPwTable.iterkeys()
+        else:
+            return [username for username in self.__tmpUserTable.iterkeys() 
+                    if self.__tmpUserTable[username].has_key(account)]
     
     def __getUserPw(self, userName):
         return self.__tmpPwTable[userName]
@@ -1501,7 +1730,7 @@ class PasswordData(object):
     def currentAccess(self, userName, accountName=None):
         access = self.__tmpUserTable.get(userName, {})
         if accountName:
-            return access.get(accountName)
+            return access.get(accountName, {})
         else: return access
     
     def __setUserAccess(self, userName, accountName, privilegeData):
@@ -1560,7 +1789,7 @@ OnlineBank.py pw <passwordFile> account [add <accountname]
 OnlineBank.py pw <passwordFile> chmod <username> <accountname> [<privileges>]
 \tPrivileges must be one of %s or %s
 OnlineBank.py server <passwordFile> <bankpath> <cert> <playground server IP> <playground server port> <connection_type>
-OnlineBank.py server -f <config>
+OnlineBank.py server <bank addr> <chaperone addr> <config>
 OnlineBank.py client_cli -f <config> 
 """ % (PasswordData.ACCOUNT_PRIVILEGES, PasswordData.ADMIN_PRIVILEGES)
 

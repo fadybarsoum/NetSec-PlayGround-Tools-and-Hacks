@@ -9,8 +9,9 @@ from playground.network.common import Packet, MIBAddressMixin
 from playground.network.message import MessageData
 #from playground.network.message import definitions
 from ServiceMessages import OpenSession, SessionOpen, SessionOpenFailure, EncryptedMobileCodeResult
-from ServiceMessages import PurchaseDecryptionKey, RunMobileCodeFailure, AcquireDecryptionKeyFailure, Heartbeat
+from ServiceMessages import PurchaseDecryptionKey, RunMobileCodeFailure, AcquireDecryptionKeyFailure
 from ServiceMessages import RerequestDecryptionKey, GeneralFailure, ResultDecryptionKey, SessionRunMobileCode
+from ServiceMessages import RunMobileCodeAck, CheckMobileCodeResult
 
 import random, time, math, os, shelve, pickle, sys, binascii
 
@@ -22,6 +23,7 @@ from Crypto.Signature import PKCS1_v1_5
 from playground.network.client.ClientMessageHandlers import RunMobileCodeHandler, MobileCodeCallbackHandler
 
 from playground.playgroundlog import packetTrace, logging, LoggingContext
+from binhex import binhex
 logger = logging.getLogger(__file__)
 
 from apps.bank.BankCore import LedgerLine
@@ -35,12 +37,8 @@ MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT = 800
 class CodeExecutionContext(object):
     def __init__(self):
         self.startTime = None
-        self.clientNonce = None
-        self.serverNonce = None
+        self.cookie = None
         self.runMobileCodeHash = None
-        self.slice = None
-        self.rate = None
-        self.account = None
         self.finishCallback = None
         
 class WrapMobileCodeResultProtocol(object):
@@ -48,11 +46,12 @@ class WrapMobileCodeResultProtocol(object):
         self.transport = transport
 
 class WrapMobileCodeResultTransport(object):
-    def __init__(self, transport, aesKey, aesIV, ctx):
+    def __init__(self, peer, host, aesKey, aesIV, ctx):
         self.__key = aesKey
         self.__iv = aesIV
-        self.__transport = transport
         self.__ctx = ctx
+        self.__peer = peer
+        self.__host = host
         
     def write(self, data):
         endTime = time.time()
@@ -63,23 +62,16 @@ class WrapMobileCodeResultTransport(object):
         padder = playground.crypto.Pkcs7Padding(AES.block_size)
         encrypted = encrypter.encrypt(padder.padData(data))
         response = MessageData.GetMessageBuilder(EncryptedMobileCodeResult)
-        response["ClientNonce"].setData(self.__ctx.clientNonce)
-        response["ServerNonce"].setData(self.__ctx.serverNonce)
+        response["Cookie"].setData(self.__ctx.cookie)
         response["RunTime"].setData(runTimeInSeconds)
         response["RunMobileCodeHash"].setData(self.__ctx.runMobileCodeHash)
-        billingSlices = int(math.ceil(float(runTimeInSeconds)/self.__ctx.slice))
-        cost = billingSlices * self.__ctx.rate
-        logger.info("%d seconds is %d billing slices. At %d bit points per slice, cost is %d" % (runTimeInSeconds,
-                                                                                                 billingSlices,
-                                                                                                 self.__ctx.rate,
-                                                                                                 cost))
-        response["Cost"].setData(cost)
-        response["Account"].setData(self.__ctx.account)
         response["EncryptedMobileCodeResultPacket"].setData(encrypted)
-        self.__ctx.finishCallback(self.__ctx, cost)
+        # in some ways, it would be easier to save "response" rather than 
+        # response serialized. But we're saving this stuff to disk in case
+        # of interruption or disconnect. So serialized it is.
+        self.__ctx.finishCallback(self.__ctx, response.serialize())
         
-        packetTrace(logger, response, "Sending encrypted mobile code result")
-        self.__transport.writeMessage(response)
+        packetTrace(logger, response, "Encrypted mobile code result ready for transmission")
         
     def writeMessage(self, m):
         self.write(m.serialize())
@@ -90,10 +82,10 @@ class WrapMobileCodeResultTransport(object):
     def writeMessages(self, messages):
         raise Exception("Only expected a single response to a single run mobile code packet")
     
-    def getHost(self): return self.__transport.getHost()
-    def getPeer(self): return self.__transport.getPeer()
-    def loseConnection(self): self.__transport.loseConnection()
-    def abortConnection(self): self.__transport.abortConnection()
+    def getHost(self): return self.__host
+    def getPeer(self): return self.__peer
+    def loseConnection(self): pass
+    def abortConnection(self): pass
 
 class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
     STATE_UNINIT = "Uninitialized"
@@ -103,9 +95,7 @@ class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
     STATE_REREQUEST = "Rerequest decryption key"
     STATE_RUNNING = "Running code"
     STATE_ERROR = "Error"
-    
-    BILLING_SLICE_SECONDS = 5*60 # 5 Minute Slices
-    BILLING_RATE_PER_SLICE = 5 # 5 Bitpoints per 5 minute slice
+
     CODE_TIMEOUT = 1*60*60 # one hour maximum run
     
     #SANDBOX_CONTROLLER = os.path.join(LOCATION_OF_PLAYGROUND, "extras", "sandbox", "IOEnabledSandbox.py")
@@ -119,18 +109,16 @@ class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
         playground.network.common.SimpleMessageHandlingProtocol.__init__(self, factory, addr)
         self.__factory = factory
         self.__accountName = accountName
-        self.__state = self.STATE_UNINIT
-        self.__connData = {"ClientNonce":0,
-                           "ServerNonce":0}
         self.__codeString = None
+        self.__curState = None
         
         self.registerMessageHandler(SessionRunMobileCode, self.__handleRunMobileCode)
         self.registerMessageHandler(OpenSession, self.__handleOpenSession)
         self.registerMessageHandler(PurchaseDecryptionKey, self.__handlePurchase)
         self.registerMessageHandler(RerequestDecryptionKey, self.__handleRerequest)
-        self.registerMessageHandler(Heartbeat, self.__handleHeartbeat)
+        self.registerMessageHandler(CheckMobileCodeResult, self.__handleCheckMobileCodeResult)
         
-    def __loadMibs(self):
+    """def __loadMibs(self):
         if self.MIBAddressEnabled():
             self.registerLocalMIB(self.MIB_PEER_ADDRESS, self.__handleMib)
             self.registerLocalMIB(self.MIB_STATE, self.__handleMib)
@@ -143,179 +131,284 @@ class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
                 return [str(self.transport.getPeer())]
             return ["<Not Connected>"]
         elif mib.endswith(self.MIB_STATE):
-            return [self.__state]
+            return [self.]
         elif mib.endswith(self.MIB_COOKIE):
             return ["%d-%d" % (self.__connData["ClientNonce"], self.__connData["ServerNonce"])]
         elif mib.endswith(self.MIB_CODE_STRING):
             if self.__codeString: return [self.__codeString]
             return ["<Not Set Yet>"]
         return ""
+        """
+        
+    def writeMsgAndClose(self, msg):
+        self.transport.writeMessage(msg)
+        self.callLater(.1, self.transport.loseConnection)
         
     def connectionMade(self):
         playground.network.common.SimpleMessageHandlingProtocol.connectionMade(self)
-        self.__loadMibs()
+        #self.__loadMibs()
 
-    def __error(self, errMsg):
-        if self.__state == self.STATE_ERROR:
+    def __error(self, errMsg, **kargs):
+        logger.error("MobileCodeServer had an error %s" % errMsg)
+        if kargs.has_key("fatal"):
+            fatal = kargs["fatal"]
+            del kargs["fatal"]
+        else:
+            fatal = True
+        if not self.__curState or self.__curState.state == self.STATE_ERROR:
             if self.transport:
                 self.transport.loseConnection()
             return None
-        if self.__state == self.STATE_UNINIT:
+        
+        if self.__curState.state == self.STATE_UNINIT:
             response = MessageData.GetMessageBuilder(SessionOpenFailure)
-            response["ClientNonce"] = self.__connData["ClientNonce"]
+            response["ClientNonce"].setData(kargs.get("ClientNonce",0))
+            self.__curState.state = self.STATE_ERROR
         else:
-            if self.__state == self.STATE_OPEN:
+            if self.__curState.state == self.STATE_OPEN:
                 response = MessageData.GetMessageBuilder(RunMobileCodeFailure)
-            elif self.__state == self.STATE_PURCHASE or self.__state == self.STATE_REREQUEST:
+            elif self.__curState.state == self.STATE_PURCHASE or self.__state == self.STATE_REREQUEST:
                 response = MessageData.GetMessageBuilder(AcquireDecryptionKeyFailure)
             else:
                 response = MessageData.GetMessageBuilder(GeneralFailure)
-            response["ClientNonce"].setData(self.__connData["ClientNonce"])
-            response["ServerNonce"].setData(self.__connData["ServerNonce"])
+            response["Cookie"].setData(self.__curState.cookie)
+        for karg in kargs.keys():
+            response[karg].setData(kargs[karg])
         response["ErrorMessage"].setData(errMsg)
-        self.__state = self.STATE_ERROR
+        if fatal: self.__state = self.STATE_ERROR
         
         packetTrace(logger, response, "Had an error %s" % errMsg)
-        self.transport.writeMessage(response)
-        self.callLater(1,self.transport.loseConnection)
+        self.writeMsgAndClose(response)
         return None
-    
-    def __handleHeartbeat(self,prot, msg):
-        logger.info("Heartbeat received, sending response")
-        msg["Response"].setData(True)
-        self.transport.writeMessage(msg)
-    
-    def __loadCookie(self, builder):
-        builder["ClientNonce"].setData(self.__connData["ClientNonce"])
-        builder["ServerNonce"].setData(self.__connData["ServerNonce"])
         
     def __handleOpenSession(self, protocol, msg):
-        if not self.__state == self.STATE_UNINIT:
-            return self.__error("Invalid open session. Session not ready to be opened (%s)" % self.__state)
         msgObj = msg.data()
         if msgObj.Authenticated:
-            return self.__error("Authenticated operation not yet supported")
-        self.__connData["ClientNonce"] = msgObj.ClientNonce
-        self.__connData["ServerNonce"] = RANDOM_u64()
+            return self.__error("Authenticated operation not yet supported", 
+                                fatal=True, ClientNonce=msgObj.ClientNonce)
+        self.__curState = self.__factory.getNewSessionState(msgObj.ClientNonce, msgObj.MobileCodeId)
+        if not self.__curState:
+            logger.info("Unwilling to serve this mobile code operation (%s). Refused to create state." % msgObj.MobileCodeId) 
+            response = MessageData.GetMessageBuilder(SessionOpenFailure)
+            response["ClientNonce"].setData(msgObj.ClientNonce)
+            response["ErrorMessage"].setData("Unwilling to serve mobile code operation %s" % msgObj.MobileCodeId)
+            self.writeMsgAndClose(response)
+            return
+        self.__curState.state = self.STATE_OPEN
         response = MessageData.GetMessageBuilder(SessionOpen)
-        self.__loadCookie(response)
-        response["ServiceLevel"].setData("BASIC")
-        response["BillingTimeSliceSeconds"].setData(self.BILLING_SLICE_SECONDS)
-        response["BillingRatePerSlice"].setData(self.BILLING_RATE_PER_SLICE)
-        response["ServiceExtras"].init()
-        self.__state = self.STATE_OPEN
+        response["ClientNonce"].setData(msgObj.ClientNonce)
+        response["Cookie"].setData(self.__curState.cookie)
+        response["ServiceLevel"].setData(self.__curState.level)
+        response["BillingRate"].setData(self.__curState.billingRate)
+        response["Account"].setData(self.__accountName)
+        response["ServiceExtras"].setData(self.__curState.extras)
         
         packetTrace(logger, response, "Received opensession message from %s. State is now open" % str(self.transport.getPeer()))
-        self.transport.writeMessage(response)
+        self.writeMsgAndClose(response)
         
     def __codeHandlerWrapper(self, realHandler, codeUnit):
         self.__codeString = codeUnit.getCodeString()
         return realHandler(codeUnit)
         
     def __handleRunMobileCode(self, prot, msg):
-        if not self.__state == self.STATE_OPEN:
-            return self.__error("Invalid command. Cannot run mobile code unless session open")
         msgObj = msg.data()
-        if msgObj.ClientNonce != self.__connData["ClientNonce"]:
-            return self.__error("Invalid connection data (clientNonce)")
-        if msgObj.ServerNonce != self.__connData["ServerNonce"]:
-            return self.__error("Invalid connection data (serverNonce)")
+        self.__curState = self.__factory.getSessionState(msgObj.Cookie)
+        if not self.__curState or not self.__curState.state == self.STATE_OPEN:
+            curState = self.__curState and self.__curState.state or "<NO STATE>"
+            return self.__error("Invalid command. Cannot run mobile code unless session open (%s)"%curState, 
+                                fatal=True)
+        
+        logger.info("State found for cookie %s. State=%s" % (msgObj.Cookie, self.__curState.state))
+        if msgObj.MaxRuntime > self.CODE_TIMEOUT:
+            response = MessageData.GetMessageBuilder(RunMobileCodeAck)
+            response["Cookie"].setData(self.__curState.cookie)
+            response["MobileCodeAccepted"].setData(False)
+            response["Message"].setData("Max Run Time parameter is too long.")
+            self.writeMsgAndClose(response)
+        
         rawRunMobileCodeMsg = msgObj.RunMobileCodePacket
         startTime = time.time()
         ctx = CodeExecutionContext()
-        ctx.account= self.__accountName
         ctx.startTime = startTime
-        ctx.clientNonce = self.__connData["ClientNonce"]
-        ctx.serverNonce = self.__connData["ServerNonce"]
+        ctx.cookie = self.__curState.cookie
         ctx.runMobileCodeHash = SHA.new(rawRunMobileCodeMsg).digest()
-        ctx.slice = self.BILLING_SLICE_SECONDS
-        ctx.rate = self.BILLING_RATE_PER_SLICE
-        ctx.finishCallback = self.__mobileCodeComplete
+        ctx.finishCallback = lambda ctx, response: self.__factory.mobileCodeComplete(ctx.cookie, response)
         aesKey = os.urandom(16)
         aesIv = os.urandom(16)
-        succeed, errmsg = self.__factory.createMobileCodeRecord(ctx.clientNonce, ctx.serverNonce, aesKey, aesIv, msgObj.MaxRuntime)
+        succeed, errmsg = self.__factory.createMobileCodeRecord(self.__curState.cookie, 
+                                                                aesKey, aesIv, msgObj.MaxRuntime)
         if not succeed:
-            return self.__error("Could not run this code. Reason: " + errmsg)
-        transport = WrapMobileCodeResultTransport(self.transport, aesKey, aesIv, ctx)
+            return self.__error("Could not run this code. Reason: " + errmsg, fatal=True)
+        transport = WrapMobileCodeResultTransport(self.transport.getPeer(), self.transport.getHost(),
+                                                  aesKey, aesIv, ctx)
         wrappedProtocol = WrapMobileCodeResultProtocol(transport)
-        self.__state = self.STATE_RUNNING
-        logger.info("Starting execution of mobile code")
+        logger.info("Starting execution of mobile code. MaxRunTime: %d" % msgObj.MaxRuntime)
         #realCodeHandler = playground.extras.sandbox.SandboxCodeunitAdapter(self.SANDBOX_CONTROLLER,
                                                                        #timeout=min(msgObj.MaxRuntime,self.CODE_TIMEOUT))
         #codeHandler = lambda codeUnit: self.__codeHandlerWrapper(realCodeHandler, codeUnit)
         runMobileCodeHandler = RunMobileCodeHandler(self)#, codeHandler)
-        runMobileCodeHandler(wrappedProtocol, Packet.DeserializeMessage(rawRunMobileCodeMsg)[0])
+        runMobileCodeHandler(wrappedProtocol, MessageData.Deserialize(rawRunMobileCodeMsg)[0])
+        self.__curState.state = self.STATE_RUNNING
+        response = MessageData.GetMessageBuilder(RunMobileCodeAck)
+        response["Cookie"].setData(self.__curState.cookie)
+        response["MobileCodeAccepted"].setData(True)
+        self.writeMsgAndClose(response)
         
-    def __mobileCodeComplete(self, ctx, cost):
-        self.__factory.mobileCodeComplete(ctx.clientNonce, ctx.serverNonce, cost)
-        self.__state = self.STATE_PURCHASE
+    def __handleCheckMobileCodeResult(self, prot, msg):
+        msgObj = msg.data()
+        self.__curState = self.__factory.getSessionState(msgObj.Cookie)
+        if not self.__curState:
+            return self.__error("No such session found for cookie %s." % msgObj.Cookie, 
+                                fatal=True)
+        elif self.__curState.state == self.STATE_RUNNING:
+            response = MessageData.GetMessageBuilder(RunMobileCodeAck)
+            response["Cookie"].setData(self.__curState.cookie)
+            response["MobileCodeAccepted"].setData(True)
+            response["Message"].setData("Still running")
+            return self.writeMsgAndClose(response)
+        elif self.__curState.state == self.STATE_PURCHASE:
+            # curState.encryptedResult is an already serialized packet.
+            # so we can't use writeMsg. Have to write, then close
+            # Can't do this here: self.writeMsgAndClose(self.__curState.encryptedResult)
+            self.transport.write(self.__curState.encryptedResult)
+            return self.transport.loseConnection()
+        if self.__curState.state not in [self.STATE_RUNNING, self.STATE_PURCHASE]:
+            return self.__error("Invalid command. Cannot check result in state (%s) cookie %s" % 
+                                (self.__curState.state, self.__curState.cookie),
+                                fatal=False)
         
     def __handlePurchase(self, prot, msg):
-        if self.__state not in [self.STATE_PURCHASE, self.STATE_UNINIT]:
-            return self.__error("Invalid command. Not in correct state for purchase (%s)" % self.__state)
         msgObj = msg.data()
-        if self.__state == self.STATE_PURCHASE:
-            if msgObj.ClientNonce != self.__connData["ClientNonce"]:
-                return self.__error("Invalid connection data (clientNonce)")
-            if msgObj.ServerNonce != self.__connData["ServerNonce"]:
-                return self.__error("Invalid connection data (serverNonce)")
-        else:
-            self.__state = self.STATE_PURCHASE
-            self.__connData["ClientNonce"] = msgObj.ClientNonce
-            self.__connData["ServerNonce"] = msgObj.ServerNonce
-        if not self.__factory.validatePurchase(msgObj.ClientNonce, msgObj.ServerNonce, 
+        self.__curState = self.__factory.getSessionState(msgObj.Cookie)
+        if self.__curState.state != self.STATE_PURCHASE:
+            return self.__error("Invalid command. Not in correct state for purchase (%s)" % self.__curState.state,
+                                fatal=False)
+        
+        if not self.__factory.validatePurchase(msgObj.Cookie,
                                                msgObj.Receipt, msgObj.ReceiptSignature):
-            return self.__error("Invalid purchase receipt")
-        decryptionKey, decryptionIv = self.__factory.getDecryptionData(msgObj.ClientNonce, msgObj.ServerNonce)
+            return self.__error("Invalid purchase receipt", fatal=True)
+        decryptionKey, decryptionIv = self.__factory.getDecryptionData(msgObj.Cookie)
         if not decryptionKey or not decryptionIv:
-            return self.__error("Unexpected failure in getDecryptionData!")
+            return self.__error("Unexpected failure in getDecryptionData!", fatal=True)
         response = MessageData.GetMessageBuilder(ResultDecryptionKey)
-        self.__loadCookie(response)
+        response["Cookie"].setData(msgObj.Cookie)
         response["key"].setData(decryptionKey)
         response["iv"].setData(decryptionIv)
         self.__state = self.STATE_FINISHED
-        packetTrace(logger, response, "%s sending key %s, iv %s" % (str(msgObj.ClientNonce)+str(msgObj.ServerNonce),
+        packetTrace(logger, response, "%s sending key %s, iv %s" % (msgObj.Cookie,
                                                                     binascii.hexlify(decryptionKey),
                                                                     binascii.hexlify(decryptionIv)))
-        self.transport.writeMessage(response)
-        self.callLater(1, self.transport.loseConnection)
+        self.writeMsgAndClose(response)
         
     def __handleRerequest(self, prot, msg):
-        if not self.__state == self.STATE_UNINIT:
-            return self.__error("Cannot re-request a key except at the beginning of a session")
+        msgObj = msg.data()
+        self.__curState = self.__factory.getSessionState(msgObj.Cookie)
+        if not self.__curState.state == self.STATE_FINISHED:
+            return self.__error("Cannot re-request a key until the session is finished", fatal=False)
         self.__state = self.STATE_REREQUEST
         msgObj = msg.data()
-        decryptionKey, decryptionIv = self.__factory.getDecryptionData(msgObj.ClientNonce, msgObj.ServerNonce)
+        decryptionKey, decryptionIv = self.__factory.getDecryptionData(msgObj.Cookie)
         if not decryptionKey or not decryptionIv:
-            return self.__error("No decryption key found")
+            return self.__error("No decryption key found", fatal=False)
+        response = MessageData.GetMessageBuilder(ResultDecryptionKey)
+        response["Cookie"].setData(msgObj.Cookie)
+        response["key"].setData(decryptionKey)
+        response["iv"].setData(decryptionIv)
+        packetTrace(logger, response, "%s re-sending key %s, iv %s" % (msgObj.Cookie,
+                                                                    binascii.hexlify(decryptionKey),
+                                                                    binascii.hexlify(decryptionIv)))
+        self.writeMsgAndClose(response)
+
+class ServerStatePod(object):
+    def __init__(self, key):
+        self.cookie = key
+        self.state = ServerProtocol.STATE_UNINIT
+        self.mobileCodeId = ""
+        self.level = "BASIC"
+        self.billingRate = 0
+        self.extras = []
+        self.paid = 0
+        self.nextTimeout = time.time() + Server.DEFAULT_TIMEOUT_TO_START
+        self.aesKey = None
+        self.aesIv = None
+        self.encryptedResult = None
 
 class Server(playground.network.client.ClientApplicationServer.ClientApplicationServer):
     MIB_BILLING_ACCOUNT = "BillingAccount"
     MIB_CODE_IN_PROCESS = "CodeInProcess"
     
-    def __init__(self, accountName, bankCert, receiptDb, keyDb):
+    DEFAULT_TIMEOUT_TO_START = 5*60 # 5 minutes after opening a session to start code
+    #DEFAULT_TIMEOUT_TO_RUN = 
+    DEFAULT_TIMEOUT_TO_PURCHASE = 30*60 # 30 minutes after code completes to purchase
+    DEFAULT_TIMEOUT_FOR_RECEIPT = 2*60*60 # 2 hours after completion to get results
+    
+    StatePod = ServerStatePod
+    
+    def __init__(self, accountName, bankCert, persistentDb):
         self.__accountName = accountName
         self.__bankCert = bankCert
-        self.__receiptDbFile = receiptDb
+        """self.__receiptDbFile = receiptDb
         self.__keyDbFile = keyDb
         self.__receiptDb = shelve.open(receiptDb, "c")
-        self.__keyDb = shelve.open(keyDb,"c")
-        self.__clearStaleKeys()
+        self.__keyDb = shelve.open(keyDb,"c")"""
         self.__inprocessCode = set([])
+        self.__connData = {}
+        db = shelve.open(persistentDb,"c")
+        for k in db.keys():
+            self.__connData[k] = db[k]
+        #self.__connDataPersistent = shelve.open(persistentDb, "c")
+        self.__persistentDbFile = persistentDb
+        self.__clearStaleKeys()
         rsaKey = RSA.importKey(bankCert.getPublicKeyBlob())
         self.__validater = PKCS1_v1_5.new(rsaKey)
+        self.__mobileCodeIds = {}
+        
+    def registerMobileCodeService(self, mobileCodeId, rate):
+        if rate < 0:
+            raise Exception("Rate must be positive")
+        self.__mobileCodeIds[mobileCodeId] = ("BASIC", rate, [])
+        
+    def getNewSessionState(self, clientNonce, mobileCodeId):
+        parameters = self.__mobileCodeIds.get(mobileCodeId, None)
+        if not parameters:
+            return None
+        serverNonce = RANDOM_u64()
+        maxtries = 10
+        sessionKey = str(clientNonce)+str(serverNonce)
+        while self.__connData.has_key(sessionKey):
+            serverNonce = RANDOM_u64()
+            sessionKey = str(clientNonce)+str(serverNonce)
+            maxtries -= 1
+            if maxtries == 0:
+                return None
+        pod = self.StatePod(sessionKey)
+        pod.level, pod.billingRate, pod.extras = parameters
+        self.__connData[sessionKey] = pod
+        
+        return pod
+    
+    def getSessionState(self, key):
+        pod = self.__connData.get(key, None)
+        return pod
+    
+    def closeSession(self, key):
+        if self.__connData.has_key(key):
+            del self.__connData[key]
         
     def __clearStaleKeys(self):
-        staleList = []
-        for searchKey in self.__receiptDb.keys():
-            keyData  = self.__receiptDb[searchKey]
-            currentKeyType, timestamp = keyData[0], keyData[1]
-            if time.time() > timestamp:
-                staleList.append(searchKey)
-        for searchKey in staleList:
-            del self.__receiptDb[searchKey]
-            if self.__keyDb.has_key(searchKey):
-                del self.__keyDb[searchKey]
+        staleList = set([])
+        for key, pod in self.__connData.items():
+            if pod.state in [ServerProtocol.STATE_UNINIT]:
+                logger.info("Clearing state that is uninit. Cookie=%s" % pod.cookie)
+                staleList.add(key)
+            elif time.time() > pod.nextTimeout:
+                logger.info("Clearing state that timed out (%s). Cookie=%s" % 
+                            (str(pod.nextTimeout), pod.cookie))
+                staleList.add(key)
+        for k in staleList:
+            logger.info("Closing session %s" % pod.cookie)
+            self.closeSession(k)
+        #self.__save()
         
     def __loadMibs(self):
         if self.MIBAddressEnabled():
@@ -334,66 +427,62 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         self.__loadMibs()
         
     def __save(self):
+        # incredibly inefficient. Haven't figured out a better solution yet.
+        # could use the "writeback" or could come up with my own approach.
         self.__clearStaleKeys()
-        self.__receiptDb.close()
-        self.__keyDb.close()
-        self.__receiptDb = shelve.open(self.__receiptDbFile, "w")
-        self.__keyDb = shelve.open(self.__keyDbFile, "w")
+        db = shelve.open(self.__persistentDbFile, "w")
+        db.clear()
+        for k in self.__connData.keys():
+            db[k] = self.__connData[k]
+        db.close()
         
     def buildProtocol(self, addr):
         return ServerProtocol(self, addr, self.__accountName)
     
-    def createMobileCodeRecord(self, clientNonce, serverNonce, aesKey, aesIv, maxRuntime):
-        searchKey = str(clientNonce) + str(serverNonce)
+    def createMobileCodeRecord(self, searchKey, aesKey, aesIv, maxRuntime):
+        statePod = self.__connData.get(searchKey,None)
+        if not statePod:
+            return False, "No such key"
         self.__inprocessCode.add(searchKey)
-        if self.__keyDb.has_key(searchKey) or self.__receiptDb.has_key(searchKey):
-            return False, "Duplicate cookie"
-        self.__keyDb[searchKey] = (aesKey, aesIv)
-        self.__receiptDb[searchKey] = ("UNKNOWN",time.time()+maxRuntime)
+        statePod.aesKey = aesKey
+        statePod.aesIv = aesIv
+        statePod.nextTimeout = time.time() + maxRuntime
         self.__save()
         return True, ""
     
-    def mobileCodeComplete(self, clientNonce, serverNonce, cost):
-        searchKey = str(clientNonce) + str(serverNonce)
-        if not self.__keyDb.has_key(searchKey) or not self.__receiptDb.has_key(searchKey):
-            return False, "No such cookie"
+    def mobileCodeComplete(self, searchKey, encryptedResult):
+        statePod = self.__connData.get(searchKey,None)
+        if not statePod:
+            return False, "No such key"
         if searchKey in self.__inprocessCode:
             self.__inprocessCode.remove(searchKey)
-        self.__receiptDb[searchKey] = ("COST",time.time()+300,cost)
+        statePod.nextTimeout = time.time() + self.DEFAULT_TIMEOUT_TO_PURCHASE
+        statePod.state = ServerProtocol.STATE_PURCHASE
+        statePod.encryptedResult = encryptedResult
         self.__save()
         return True, ""
     
-    def validatePurchase(self, clientNonce, serverNonce, receipt, receiptSignature):
-        searchKey = str(clientNonce) + str(serverNonce)
-        if not self.__keyDb.has_key(searchKey) or not self.__receiptDb.has_key(searchKey):
-            return False, "No such cookie"
-        if not self.__receiptDb[searchKey][0] == "COST":
-            return False, "Not expecting a purchase"
+    def validatePurchase(self, searchKey, receipt, receiptSignature):
+        statePod = self.getSessionState(searchKey)
+        if not statePod:
+            return False, "Session has expired or never existed"
         if not self.__validater.verify(SHA.new(receipt), receiptSignature):
             return False, "Signature failed"
         ll = pickle.loads(receipt)
         if ll.memo(self.__accountName) != searchKey:
             return False, "Memo is not equal to clientNonce+serverNonce"
-        costCode, timestamp, expectedCost = self.__receiptDb[searchKey]
-        if ll.getTransactionAmount(self.__accountName) < expectedCost:
-            remaining = expectedCost - ll.getTransactionAmount(self.__accountName)
-            self.__receiptDb[searchKey] = ("COST",remaining)
+        statePod.paid += ll.getTransactionAmount(self.__accountName)
+        if statePod.paid < statePod.billingRate:
             return False, "Insufficient purchase"
-        self.__receiptDb[searchKey]=("RECEIPT",time.time()+300,receipt,receiptSignature)
+        statePod.nextTimeout = time.time() + self.DEFAULT_TIMEOUT_FOR_RECEIPT
         self.__save()
         return True, ""
     
-    def getDecryptionData(self, clientNonce, serverNonce):
-        searchKey = str(clientNonce) + str(serverNonce)
-        if not self.__keyDb.has_key(searchKey) or not self.__receiptDb.has_key(searchKey):
-            logger.error("Attempt to get decryption key, iv for %s, but search key not found" % searchKey)
-            return None, None
-        if not self.__receiptDb[searchKey][0] == "RECEIPT":
-            rCode = self.__receiptDb[searchKey][0]
-            logger.error("Attempt to get decryption key, iv for %s, but expected receipt code is" % (searchKey,
-                                                                                                     rCode))
-            return None, None
-        key, iv = self.__keyDb[searchKey]
+    def getDecryptionData(self, searchKey):
+        statePod = self.getSessionState(searchKey)
+        if not statePod:
+            return False, "Session has expired or never existed"
+        key, iv = statePod.aesKey, statePod.aesIv
         logger.info("Consistency check: %s Produced key (%s) and iv (%s)" % (searchKey,
                                                                              binascii.hexlify(key), 
                                                                              binascii.hexlify(iv)))
@@ -423,9 +512,10 @@ if __name__ == "__main__":
         sys.exit("Could not locate cert file " + cert)
     with open(cert) as f:
         cert = X509Certificate.loadPEM(f.read())
-    receiptdbFile = "receiptdb"+playgroundAddress.toString()
-    keysdbFile = "keysdb"+playgroundAddress.toString()
-    server = Server(accountName, cert, receiptdbFile, keysdbFile)
+    persistenceFile = "mc_server_data."+playgroundAddress.toString()
+    server = Server(accountName, cert, persistenceFile)
+    # hard coded... move to config file
+    server.registerMobileCodeService("Parallel TSP", 50)
     client = playground.network.client.ClientBase(playgroundAddress)
     client.listen(server, MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT, connectionType="RAW")
     client.connectToChaperone(ipAddr, ipPort)

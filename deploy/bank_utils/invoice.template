@@ -1,0 +1,7 @@
+FROM: <your name here>
+COMPANY: <your company name here>
+ACCOUNT: <your account name here>
+INVOICE: <invoice number here>
+AMOUNT: <amount here>
+DATE: <date here>
+DETAILS: <details here, as many lines as needed>

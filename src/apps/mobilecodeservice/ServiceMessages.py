@@ -12,6 +12,7 @@ class OpenSession(MessageDefinition):
     MESSAGE_VERSION="1.0"
     BODY = [
             ("ClientNonce", UINT8),
+            ("MobileCodeId", STRING),
             ("Authenticated", BOOL1),
             ("Login",STRING, OPTIONAL),
             ("PasswordHash",STRING, OPTIONAL)
@@ -22,10 +23,10 @@ class SessionOpen(MessageDefinition):
     MESSAGE_VERSION="1.0"
     BODY = [
             ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8),
+            ("Cookie",STRING),
             ("ServiceLevel",STRING),
-            ("BillingTimeSliceSeconds",UINT8),
-            ("BillingRatePerSlice",UINT8),
+            ("BillingRate",UINT8),
+            ("Account",STRING),
             ("ServiceExtras",LIST(STRING))
             ]
     
@@ -40,29 +41,38 @@ class SessionRunMobileCode(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.SessionRunMobileCode"
     MESSAGE_VERSION="1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce", UINT8),
+            ("Cookie",STRING),
             ("MaxRuntime", UINT8),
             ("RunMobileCodePacket",STRING)]
+    
+class RunMobileCodeAck(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.RunMobileCodeAck"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("Cookie",STRING),
+            ("MobileCodeAccepted", BOOL1),
+            ("Message",STRING,OPTIONAL)]
+    
+class CheckMobileCodeResult(MessageDefinition):
+    PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.CheckMobileCodeResult"
+    MESSAGE_VERSION="1.0"
+    BODY = [
+            ("Cookie",STRING)]
     
 class EncryptedMobileCodeResult(MessageDefinition):
     PLAYGROUND_IDENTIFIER = "apps.mobilecodeservice.EncryptedMobileCodeResult"
     MESSAGE_VERSION = "1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8),
+            ("Cookie",STRING),
             ("RunTime",UINT8),
             ("RunMobileCodeHash",STRING),
-            ("Account",STRING),
-            ("Cost",UINT8),
             ("EncryptedMobileCodeResultPacket",STRING)]
     
 class PurchaseDecryptionKey(MessageDefinition):
     PLAYGROUND_IDENTIFIER = "apps.mobilecodeservice.PurchaseDecryptionKey"
     MESSAGE_VERSION = "1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8),
+            ("Cookie",STRING),
             ("Receipt", STRING),
             ("ReceiptSignature", STRING)]
     
@@ -70,8 +80,7 @@ class ResultDecryptionKey(MessageDefinition):
     PLAYGROUND_IDENTIFIER = "apps.mobilecodeservice.ResultDecryptionKey"
     MESSAGE_VERSION = "1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8),
+            ("Cookie",STRING),
             ("key",STRING),
             ("iv",STRING)]
     
@@ -79,36 +88,25 @@ class RerequestDecryptionKey(MessageDefinition):
     PLAYGROUND_IDENTIFIER = "apps.mobilecodeservice.RerequestDecryptionKey"
     MESSAGE_VERSION = "1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8)]
-    
-class Heartbeat(MessageDefinition):
-    PLAYGROUND_IDENTIFIER = "apps.mobilecodeservice.Heartbeat"
-    MESSAGE_VERSION = "1.0"
-    BODY = [
-            ("Response", BOOL1)
-            ]
+            ("Cookie",STRING)]
 
 class RunMobileCodeFailure(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.RunMobileCodeFailure"
     MESSAGE_VERSION="1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8),
+            ("Cookie",STRING),
             ("ErrorMessage",STRING)]
     
 class AcquireDecryptionKeyFailure(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.AcquireDecryptionKeyFailure"
     MESSAGE_VERSION="1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8),
+            ("Cookie",STRING),
             ("ErrorMessage",STRING)]
     
 class GeneralFailure(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.GeneralFailure"
     MESSAGE_VERSION="1.0"
     BODY = [
-            ("ClientNonce",UINT8),
-            ("ServerNonce",UINT8),
+            ("Cookie",STRING),
             ("ErrorMessage",STRING)]

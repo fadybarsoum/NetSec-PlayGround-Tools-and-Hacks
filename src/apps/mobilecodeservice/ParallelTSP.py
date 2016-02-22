@@ -9,14 +9,18 @@ import sys, os, getpass, math, time, shutil, subprocess
 from playground.crypto import X509Certificate
 from apps.bank.OnlineBank import PlaygroundOnlineBankClient
 from twisted.internet import reactor
+from playground.network.common.Timer import OneshotTimer
 
 import playground
 from playground.playgroundlog import logging, LoggingContext
 from playground.network.common import MIBAddressMixin
+from playground.config import LoadOptions
 logger = logging.getLogger(__file__)
 
 from PTSPVerify import VERIFY_PICKLE_LOAD_FAILURE, NOT_DIST_PATH_TUPLE_FAILURE
 from PTSPVerify import DIST_NOT_AN_INT, PATH_NOT_A_LIST, ERROR_NOT_AN_EXCEPTION, EVIL_DETECTED
+
+from utils.ui import CLIShell, stdio
 
 LOCATION_OF_PLAYGROUND = os.path.dirname(playground.__file__)
 
@@ -123,7 +127,16 @@ def numToPath(n, num):
     return path
         
 
-class ParallelTSP(MIBAddressMixin):
+class AddrPod(object):
+    def __init__(self, addr):
+        self.addr = addr
+        self.jobsSent = 0
+        self.jobsCompleted = 0
+        self.pathsCompleted = 0
+        self.jobErrors = 0
+        self.paid = 0
+
+class ParallelTSP(CLIShell, MIBAddressMixin):
     PATHS_PER_PARALLEL = 150000
     VERIFY_ODDS = .1
     #SANDBOX_CONTROLLER = os.path.join(LOCATION_OF_PLAYGROUND, "extras", "sandbox", "DefaultSandbox.py")
@@ -134,7 +147,10 @@ class ParallelTSP(MIBAddressMixin):
     MIB_CURRENT_BEST_PATH_DISTANCE = "CurrentBestTSPPathDistance"
     MIB_CURRENT_CODE = "CurrentCode"
     
+
+    
     def __init__(self, n=40, pathsPerParallel=None):
+
         self.__matrix = generateDistanceMatrix(n)
         self.__parallelCodes = {}
         self.__citiesStr = "[\n"
@@ -150,6 +166,9 @@ class ParallelTSP(MIBAddressMixin):
         self.__resubmit = []
         self.__finished = False
         self.__checkIds = {}
+        self.__idsToPaths = {}
+        self.__completedPaths = 0
+        self.__addrData = {}
         
     def configureMIBAddress(self, *args, **kargs):
         MIBAddressMixin.configureMIBAddress(self, *args, **kargs)
@@ -202,12 +221,44 @@ class ParallelTSP(MIBAddressMixin):
         
     def hasNext(self):
         return (self.__curPath < self.__maxPaths)
+    
+    def mobileCodeId(self):
+        return "Parallel TSP"
+    
+    def maxRate(self):
+        return 100
+    
+    def maxRuntime(self):
+        return 1*60*60
+    
+    def maxPaths(self):
+        return self.__maxPaths
+    
+    def currentBestPath(self):
+        return (self.__bestPath, self.__shortest)
+    
+    def iterAddrStats(self):
+        for addr in self.__addrData.values():
+            yield addr
+    
+    def currentExecutions(self):
+        executions = []
+        for codeId in self.__parallelCodes.keys():
+            paths, computingAddr, finished = self.__idsToPaths[codeId]
+            executions.append((codeId, paths, computingAddr, finished))
+        return executions
+    
+    def completedPathCount(self):
+        return self.__completedPaths
         
     def getNextCodeUnit(self, addr):
+        if not self.__addrData.has_key(addr):
+            self.__addrData[addr] = AddrPod(addr)
         while self.__resubmit:
             codeStr, codeId = self.__resubmit.pop()
             if not self.__parallelCodes.has_key(codeId): continue
             self.__parallelCodes[codeId][1] = addr
+            self.__idsToPaths[codeId][1] = addr
             return codeStr, codeId
         
         if not self.hasNext():
@@ -218,10 +269,12 @@ class ParallelTSP(MIBAddressMixin):
         #instruction = playground.network.common.DefaultPlaygroundMobileCodeUnit(codeStr)
         id = random.randint(0,(2**64)-1)
         self.__parallelCodes[id] = [instructionStr, addr]
+        self.__idsToPaths[id] = [(start,end), addr, False]
         logger.info("CodeStr Len: %d" % len(instructionStr))
         if random.random() < self.VERIFY_ODDS:
             self.__checkIds[id] = (start, end)
         self.__curPath = end+1
+        self.__addrData[addr].jobsSent += 1
         return instructionStr, id
     
     def pickleBack(self, id, success, pickledResult):
@@ -246,6 +299,8 @@ class ParallelTSP(MIBAddressMixin):
         if type(dist) != int or type(path) != list:
             return False, "Invalid result, Expected int, list"
         verifiedOK = True
+        addr = self.__parallelCodes[id][1]
+        
         if self.__checkIds.has_key(id):
             logger.info("Validating ID %d" % id)
             start, end = self.__checkIds[id]
@@ -257,6 +312,14 @@ class ParallelTSP(MIBAddressMixin):
                 verifiedOK = False
                 dist = expectedDist
                 path = expectedPath
+        if verifiedOK: 
+            self.__idsToPaths[id][2] = True
+            start, end = self.__idsToPaths[id][0]
+            self.__completedPaths += (end-start)
+            self.__addrData[addr].jobsCompleted += 1
+            self.__addrData[addr].pathsCompleted += (end-start)
+        else:
+            self.__addrData[addr].jobErrors += 1
         del self.__parallelCodes[id]
         if self.__shortest == None or dist < self.__shortest:
             self.__shortest = dist
@@ -274,45 +337,184 @@ class ParallelTSP(MIBAddressMixin):
         if not self.__parallelCodes.has_key(id):
             return False, "Unknown id %d" % id
         self.__resubmit.append((self.__parallelCodes[id][0], id))
+        self.__idsToPaths[1] = "<Needs Reassignment>"
         return False, "There shouldn't be exceptions"
     
-def finish(ptsp):
-    resultsFile = "tsp_results."+str(time.time())+".txt"
-    print "Finished computation"
-    print ptsp.finalResult()
-    with open(resultsFile,"w") as f:
-        f.write(str(ptsp.citiesMatrix())+"\n\n")
-        f.write(str(ptsp.finalResult()))
-    ptsp.disableMIBAddress()
-    reactor.stop()
+def validateConfigFile(options):
+    bankData = options.getSection("ptsp.bankdata")
+    bankData["bank_addr"]
+    bankData["account"]
+    bankData["user"]
+    bankData["bank_cert_path"]
+    #parameter = options.getSection("ptsp.parameters")
+    #loggingData = options.getSection("ptsp.logging")
+    #loggingData["packet_tracing"]
+    #loggingData[""]
+
+class ParallelTSPCLI(CLIShell):
+    BANNER = """
+Parallel Traveling Salesman. Sends out paths to be computed
+by remote hosts. Results are collected until the best path
+is known. Execute 'start' to begin the computation. 
+Execute 'status' to see how things are going.
+"""
+    def __init__(self, options, parallelMaster):
+        CLIShell.__init__(self, banner = self.BANNER)   
+        self.parallelMaster = parallelMaster
+        self.options = options
+        self.__poll = None
+        self.__pollingCallback = None
+        self.__started = False
+        startHandler = CLIShell.CommandHandler("start",helpTxt="Start the parallelTsp",
+                                               defaultCb=self.start,
+                                               mode=CLIShell.CommandHandler.STANDARD_MODE)
+        self.registerCommand(startHandler)
+        configHandler = CLIShell.CommandHandler("config",helpTxt="Show current config (can't change yet)",
+                                                defaultCb=self.config,
+                                                mode=CLIShell.CommandHandler.STANDARD_MODE)
+        self.registerCommand(configHandler)
+        statusHandler = CLIShell.CommandHandler("status",helpTxt="Show current status",
+                                                defaultCb=self.status,
+                                                mode=CLIShell.CommandHandler.STANDARD_MODE)
+        statusHandler.configure(1, self.status, helpTxt="Show status and set to poll the status",
+                                usage="[polling time]")
+        self.registerCommand(statusHandler)
+        checkbalanceHandler = CLIShell.CommandHandler("balance", helpTxt="Check the current account balance",
+                                                      defaultCb=self.checkBalance,
+                                                      mode=CLIShell.CommandHandler.STANDARD_MODE)
+        self.registerCommand(checkbalanceHandler)
+        
+    def __checkBalanceResponse(self, msgObj):
+        self.transport.write("Current balance in account: %d\n" % msgObj.Balance)
+        
+    def __checkBalanceFailed(self, failure):
+        self.transport.write("Balance check failed: %s\n" % failure)
+        
+    def checkBalance(self, writer):
+        d = self.parallelMaster.checkBalance()
+        d.addCallback(self.__checkBalanceResponse)
+        d.addErrback(self.__checkBalanceFailed)
+        
+    def config(self, writer):
+        for k, v in self.options.items():
+            self.transport.write("%s: %s\n" % (k,v))
+            
+    def status(self, writer, poll=None):
+        if not self.__started:
+            self.transport.write("Can't get status. Not yet started\n")
+            return
+        if poll != None:
+            # We're changing the polling time. Cancel the current, then
+            # set the new polling time
+            try:
+                poll = int(poll)
+            except:
+                self.transport.write("Polling time must be an integer. Got %s" % poll)
+                return
+            if poll < 0:
+                self.transport.write("Polling time must be a positive integer. Got %d" % poll)
+                return
+            if self.__pollingCallback:
+                self.__pollingCallback.cancel()
+                if poll == 0:
+                    self.__pollingCallback = None
+            self.__poll = poll
+        template = """
+    Max Paths: %(Max_Path_Count)s
+    Completed Paths: %(Completed_Path_Count)s
+    Currently Executing Paths: %(Current_Path_Count)s
+%(Current_Execution_Details)s
+    Address Data:
+        Address    Jobs Sent    Completed Jobs    Errors    Paid
+%(Addr_Stats)s"""
+        templateData = {}
+        templateData["Max_Path_Count"] = self.ptsp.maxPaths()
+        templateData["Completed_Path_Count"] = self.ptsp.completedPathCount()
+        
+        currStr = ""
+        currentExecutions = self.ptsp.currentExecutions()
+        currentPathCount = 0
+        for execId, paths, addr, finished in currentExecutions:
+            currStr += "\t\t%s:\t%s\t%s\n" % (addr, execId, paths)
+            start, end = paths
+            currentPathCount += (end-start)
+        templateData["Current_Path_Count"] = currentPathCount
+        addrStr = ""
+        for addrData in self.ptsp.iterAddrStats():
+            addrStr += "\t\t%s\t%s\t%s\t%s\t(Not Yet Implemented)" % (addrData.addr, addrData.jobsSent, addrData.jobsCompleted, addrData.jobErrors)  
+        
+        templateData["Current_Execution_Details"] = currStr
+        templateData["Addr_Stats"] = addrStr
+        
+        self.transport.write((template % templateData)+"\n")
+        if self.__poll:
+            # if we have a polling time set, fire.
+            self.__pollingCallback = OneshotTimer(lambda: self.status(writer))
+            self.__pollingCallback.run(self.__poll)
+        
+    def start(self, writer):
+        if self.__started:
+            self.transport("Program already started.\n")
+            return
+        self.__started=True
+        kargs = {}
+        parameters = self.options.getSection("ptsp.parameters")
+        if parameters.has_key("n"):
+            kargs["n"] = int(parameters["n"])
+        if parameters.has_key("paths_per_parallel_execution"):
+            kargs["pathsPerParallel"] = int(parameters["paths_per_parallel_execution"])
+        self.ptsp = ParallelTSP(**kargs)
+        self.parallelMaster.runParallel(self.ptsp, self.finish)
+        
+    def finish(self):
+        #resultsFile = "tsp_results."+str(time.time())+".txt"
+        self.transport.write("Finished computation\n")
+        self.transport.write("\tResult: %s\n" % str(self.ptsp.finalResult()))
+        if self.__pollingCallback:
+            self.__pollingCallback.cancel()
+            self.__pollingCallback = None
+        #with open(resultsFile,"w") as f:
+        #    f.write(str(ptsp.citiesMatrix())+"\n\n")
+        #    f.write(str(ptsp.finalResult()))
+        #ptsp.disableMIBAddress()
+        #reactor.stop()
 
 USAGE = """
-ParallelTSP <bank cert> <login name> <playground server> <playground port>
+ParallelTSP <playground_addr> <chaperone_addr> <config_file>
 """
+#<bank cert> <login name> <account name> <playground server> <playground port>
+#"""
 def main():
-    if len(sys.argv) < 5:
+    if len(sys.argv) != 4:
         sys.exit(USAGE)
-    cert, loginName, ipServer, ipPort = sys.argv[1:5] 
-    ipPort = int(ipPort)
-    if not os.path.exists(cert):
-        sys.exit("Could not locate cert file " + cert)
-    with open(cert) as f:
+    myAddr, chaperoneAddr, configFile = sys.argv[1:4]
+    configOptions = LoadOptions(configFile)
+    validateConfigFile(configOptions)
+    #cert, loginName, accountName, ipServer, ipPort = sys.argv[1:6] 
+    #ipPort = int(ipPort)
+    bankOptions = configOptions.getSection("ptsp.bankdata")
+    if not os.path.exists(bankOptions["bank_cert_path"]):
+        sys.exit("Could not locate cert file " + bankOptions["bank_cert_path"])
+    with open(bankOptions["bank_cert_path"]) as f:
         cert = X509Certificate.loadPEM(f.read())
-    pw = getpass.getpass("Bank password:")
-    bankFactory = PlaygroundOnlineBankClient(cert, loginName, pw)
-    myAddr = playground.network.common.PlaygroundAddress(20151, 0, 2, 999)
+    pw = getpass.getpass("Account %s password:" % bankOptions["account"])
+    bankFactory = PlaygroundOnlineBankClient(cert, bankOptions["user"], pw)
+    myAddr = playground.network.common.PlaygroundAddress.FromString(myAddr)
+    bankAddr = playground.network.common.PlaygroundAddress.FromString(bankOptions["bank_addr"])
     client = playground.network.client.ClientBase(myAddr)
     
     logctx = LoggingContext()
     logctx.nodeId = "parallelTSP_"+myAddr.toString()
+    # set this up as a configuration option
     #logctx.doPacketTracing = True
     playground.playgroundlog.startLogging(logctx)
     
-    parallelMaster = BasicMobileCodeFactory(client, bankFactory)
-    ptsp = ParallelTSP(pathsPerParallel=3000000)
+    parallelMaster = BasicMobileCodeFactory(client, bankOptions["account"], bankFactory, bankAddr)
+    
     #client.runWhenConnected(lambda: ptsp.configureMIBAddress("ParallelTSP", client, client.MIBRegistrar()))
-    client.runWhenConnected(lambda: parallelMaster.runParallel(ptsp, lambda: finish(ptsp)))
-    client.connectToChaperone(ipServer, ipPort)
+    #client.runWhenConnected(lambda: )
+    client.runWhenConnected(lambda: stdio.StandardIO(ParallelTSPCLI(configOptions, parallelMaster)))
+    client.connectToChaperone(chaperoneAddr, 9090)
     
 if __name__ == "__main__":
     main()

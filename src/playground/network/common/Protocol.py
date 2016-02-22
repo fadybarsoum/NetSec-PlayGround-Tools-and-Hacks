@@ -78,7 +78,9 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
             return
         if len(buf) != bytesConsumed:
             self.reportError("Received extra bytes. Expected %d, but got %d" % (bytesConsumed, len(buf)))
-        self.messageReceived(msgBuilder)
+        if not msgBuilder:
+            self.reportError("Could not get messageBuilder. Failed.")
+        else: self.messageReceived(msgBuilder)
             
     def messageReceived(self, msg):
         raise Exception("Must be implemented by subclasses")
