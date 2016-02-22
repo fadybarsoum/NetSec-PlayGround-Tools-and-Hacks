@@ -7,7 +7,6 @@ Created on Feb 16, 2016
 import os, threading, sys, textwrap, traceback, shlex
 from twisted.internet import reactor, defer
 from twisted.protocols import basic
-from defer import Deferred
 
 
 class AdvancedStdio(object):
