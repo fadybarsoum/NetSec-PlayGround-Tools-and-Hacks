@@ -508,7 +508,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             errorResponse["ErrorMessage"].setData("No password hash specified")
             self.transport.writeMessage(errorResponse)
             return
-        elif self.__pwDb.currentUserPassword(userName) != msgObj.oldPw:
+        elif self.__pwDb.currentUserPassword(userName) != msgObj.oldPwHash:
                 errorResponse["ErrorMessage"].setData("Invalid Password")
                 self.transport.writeMessage(errorResponse)
                 return
