@@ -35,7 +35,6 @@ from playground.network.message import definitions
 
 from playground.playgroundlog import packetTrace, logging, protocolLog
 from apps.mobilecodeservice.ServiceMessages import CheckMobileCodeResult
-from numpy.core.numeric import ones
 from playground.network.common.Timer import OneshotTimer
 logger = logging.getLogger(__file__)
 
