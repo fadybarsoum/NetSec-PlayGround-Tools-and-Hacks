@@ -161,11 +161,16 @@ class ClientTest(object):
         for message in self.messagesToSend:
             protocol.sendMessage(message)
 
+USAGE = """usage: echotest <playgroundAddr> <chaperone addr> <mode>
+  mode is either 'server' or a server's address (client mode)"""
+
 if __name__=="__main__":
-    playgroundNode = int(sys.argv[3])
-    
-    # Create my address.
-    myAddress = PlaygroundAddress(20134, 0, 0, playgroundNode)
+    try:
+        playgroundAddr, chaperoneAddr, mode = sys.argv[1:4]
+    except:
+        sys.exit(USAGE)
+
+    myAddress = PlaygroundAddress.FromString(playgroundAddr)
     
     # Turn on logging
     logctx = playgroundlog.LoggingContext()
@@ -178,10 +183,10 @@ if __name__=="__main__":
     
     # Set up the client base
     client = ClientBase(myAddress)
-    serverAddress, serverPortString = sys.argv[1:3]
-    serverPort = int(serverPortString)
+    #serverAddress, serverPortString = sys.argv[1:3]
+    chaperonePort = 9090#int(serverPortString)
     
-    if playgroundNode == 1:
+    if mode.lower() == "server":
         # This guy will be the server. Create an instance of the factory
         echoProtocolServer = EchoServer()
         
@@ -189,12 +194,15 @@ if __name__=="__main__":
         client.listen(echoProtocolServer, 101)
         
         # tell the playground client to connect to playground server and start running
-        client.connectToChaperone(serverAddress, serverPort)
+        client.connectToChaperone(chaperoneAddr, chaperonePort)
         
         
-    elif playgroundNode == 0:
+    else:
+        try:
+            echoServerAddr = PlaygroundAddress.FromString(mode)
+        except:
+            sys.exit(USAGE)
         # This guy will be the client. The server's address is hard coded
-        echoServerAddr = PlaygroundAddress(20134, 0, 0, 1)
         
         # Create a echoProtocolClient (factory)
         echoProtocolClient = EchoClientFactory()
@@ -210,4 +218,4 @@ if __name__=="__main__":
         client.runWhenConnected(lambda: tester.sendMessages(client, echoServerAddr))
         
         # Connect to Playground and go
-        client.connectToChaperone(serverAddress, serverPort)
+        client.connectToChaperone(chaperoneAddr, chaperonePort)
