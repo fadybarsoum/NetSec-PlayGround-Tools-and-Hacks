@@ -264,7 +264,9 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
         if not self.hasNext():
             return None, None
         start = self.__curPath
-        end = self.__curPath + self.__pathsPerParallel
+        end = self.__curPath + (self.__pathsPerParallel-1)
+        if end > self.__maxPaths:
+            end = self.__maxPaths
         instructionStr = TSPCodeTemplate % (self.__citiesStr, self.__curPath, end)
         #instruction = playground.network.common.DefaultPlaygroundMobileCodeUnit(codeStr)
         id = random.randint(0,(2**64)-1)
@@ -427,6 +429,8 @@ Execute 'status' to see how things are going.
     Address Data:
         Address    Jobs Sent    Completed Jobs    Errors    Paid
 %(Addr_Stats)s"""
+        if self.ptsp.finished():
+            template = ("FINISHED: %s\n" % str(self.ptsp.finalResult())) + template
         templateData = {}
         templateData["Max_Path_Count"] = self.ptsp.maxPaths()
         templateData["Completed_Path_Count"] = self.ptsp.completedPathCount()

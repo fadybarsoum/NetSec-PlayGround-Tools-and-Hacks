@@ -432,6 +432,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         self.__state.state = BasicClient.STATE_PURCHASE
         self.__state.encryptedResult = msgObj.EncryptedMobileCodeResultPacket
         self.__factory.protocolSignalsEncryptedResult(self.__state)
+        if self.transport: self.transport.loseConnection()
         """
         success, errMsg = self.__factory.registerEncryptedResult(msgObj.ClientNonce, msgObj.ServerNonce,
                                                             msgObj.EncryptedMobileCodeResultPacket)
@@ -661,6 +662,8 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         logger.error("Got an error: %s" % e)
 
     def peersReceived(self, peerList):
+        if self.__parallelControl.finished():
+            return
         logger.info("Received addresses for running mobile code")
         
         #print "got addresses", peerList
@@ -709,6 +712,8 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         
     def __buildClientConnectedCallback(self, peer):
         def callback(cookie):
+            if self.__parallelControl.finished():
+                return
             codeId = self.__parallelControl.mobileCodeId()
             
             maxRuntime = self.__parallelControl.maxRuntime()
@@ -737,6 +742,8 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         return errback
         
     def __checkClients(self):
+        if self.__parallelControl.finished():
+            return
         checkClientKeys = self.__openClients.keys()
         getMorePeers = False
         for clientAddr in checkClientKeys:
@@ -753,9 +760,9 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
     def autoDiscover(self):
         if not self.__parallelControl.finished():
             self.__playground.getPeers(self.peersReceived)
-        else:
-            # nothing to do here. We're done
-            self.__finishedCallback()
+        #else:
+        #    # nothing to do here. We're done
+        #    self.__finishedCallback()
         
     def runParallel(self, parallelControl, finishedCallback):
         #if isinstance(parallelControl, MIBAddressMixin):
@@ -1056,6 +1063,8 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         success, errMsg = self.__parallelControl.pickleBack(data.execId, mobileCodeResultObj.success, picklePart)
         if not success:
             self.__errorWithCode(errMsg, data.execId, cookie, fatal=True)
+        elif self.__parallelControl.finished():
+            self.__finishedCallback()
         else:
             self.__connectToMobileCodeServer(data.addr)
         """success = True
