@@ -167,12 +167,21 @@ def test_basic():
     test_start(filename, cert, key, passwd, printPoints)
     simulate_shutdown()
     test_reload(filename, cert, passwd, printPoints)
-    
-def serializer(bps):
-    filename = "bitpoints.%d.%s" % (len(bps), time.ctime().replace(" ","_"))
-    with open(filename, "wb+") as f:
-        for s in bps:
-            f.write(s.serialize())
+
+class DefaultSerializer(object):
+    def __init__(self, outputDir=None, filebase="bitpoints"):
+        self.__outputDir = outputDir
+        if outputDir and not os.path.exists(self.__outputDir):
+            raise Exception("No such directory %s" % self.__outputDir)
+        self.__base = filebase  
+        
+    def __call__(self, bps):
+        filename = "%s.%d.%s" % (self.__base, len(bps), time.ctime().replace(" ","_"))
+        if self.__outputDir:
+            filename = os.path.join(self.__outputDir, filename)
+        with open(filename, "wb+") as f:
+            for s in bps:
+                f.write(s.serialize())
     
 def main(args):
     if args[0] == "create":
@@ -187,13 +196,30 @@ def main(args):
             sys.exit("Passwords do not match")
         PrintingPress.CreateBankVault(filename, cert, key, passwd)
     elif args[0] == "mint":
+        if len(args) == 1 or args[1].lower() in ["--help", "-h", "help"]:
+            sys.exit("mint <amount> <cert> <filename> [<output_dir>]\n"+
+                     "  amount can be of the form <amount>:<denomination>")
         amount, cert, filename = args[1:4]
+        if len(args) > 4:
+            outputDir = args[4]
+        else:
+            outputDir = None
         with open(cert) as f:
             cert = X509Certificate.loadPEM(f.read())
+        if ":" in amount:
+            amount, denominations = amount.split(":")
+        else:
+            denominations = amount
         amount = int(amount)
+        denominations = int(denominations)
         passwd = getpass.getpass("Mint password: ")
+        total = 0
+        serializer = DefaultSerializer(outputDir)
         mint = PrintingPress(cert, passwd, filename)
-        mint.mintBitPoints(amount, serializer)
+        while total < amount:
+            print "Minting %d of %d bitpoints" % ((total+denominations),amount)
+            mint.mintBitPoints(denominations, serializer)
+            total += denominations
     elif args[0] == "info":
         filename = args[1]
         if len(args) > 2:
