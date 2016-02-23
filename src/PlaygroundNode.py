@@ -353,9 +353,11 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
             return self.__interactiveLineReceived(line)
             
         try:
-            self.lineReceivedImpl(line)
+            d = self.lineReceivedImpl(line)
+            return (True, d)
         except Exception, e:
             self.handleException(e)
+            return (False, None)
             
     """def __lineReceivedImpl(self, commandline):
         commandline = commandline.strip()
@@ -385,13 +387,16 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
         if line == '_HOME_':
             self.transport.write("Exiting interactive mode.\n")
             self.reset(resetInteractivity=True)
+            return (False, None)
         else:
             try:
-                self.__interactiveProtocol.lineReceived(line)
+                d = self.__interactiveProtocol.lineReceived(line)
+                return (True, d)
             except Exception, e:
                 self.handleException(e)
                 self.transport.write("Exiting interactive mode.\n")
                 self.reset(resetInteractivity=True)
+                return (False, None)
         
     def reset(self, resetInteractivity=False):
         if resetInteractivity:
