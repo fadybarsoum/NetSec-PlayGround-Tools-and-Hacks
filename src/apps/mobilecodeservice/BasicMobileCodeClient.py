@@ -467,7 +467,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         
     def sendProofOfPayment(self, state, receipt, receiptSignature):
         if state.state != BasicClient.STATE_PURCHASE:
-            raise Exception("Not in correct mode to send proof of payment. Got %s, cookie %s" % 
+            self.__error("Not in correct mode to send proof of payment. Got %s, cookie %s" % 
                             (state.state, state.cookie))
         protocolLog(self, logger.info, "Sending proof of payment for cookie %s" % state.cookie)
         request = MessageData.GetMessageBuilder(PurchaseDecryptionKey)
