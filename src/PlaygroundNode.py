@@ -353,8 +353,7 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
             return self.__interactiveLineReceived(line)
             
         try:
-            d = self.lineReceivedImpl(line)
-            return (True, d)
+            return self.lineReceivedImpl(line)
         except Exception, e:
             self.handleException(e)
             return (False, None)
@@ -390,8 +389,7 @@ class PlaygroundNodeCLI(CLIShell, ErrorHandler):
             return (False, None)
         else:
             try:
-                d = self.__interactiveProtocol.lineReceived(line)
-                return (True, d)
+                return self.__interactiveProtocol.lineReceived(line)
             except Exception, e:
                 self.handleException(e)
                 self.transport.write("Exiting interactive mode.\n")
