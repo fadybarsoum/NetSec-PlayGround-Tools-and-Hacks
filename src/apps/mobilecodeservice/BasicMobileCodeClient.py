@@ -141,8 +141,11 @@ class BasicClient(object):
             return
         self.sessions[state.cookie] = state
         if state.d:
-            state.d.callback(state.cookie)
+            # the callback may, in fact, reset state.d. We don't want
+            # to overwrite it.
+            d = state.d
             state.d = None
+            d.callback(state.cookie)
         else:
             logger.error("No deferred in state for cookie %s. Perhaps called twice?" % state.cookie)
         
@@ -167,8 +170,10 @@ class BasicClient(object):
             return
         self.sessions[state.cookie] = state
         if state.d:
-            state.d.callback((state.cookie, state.encryptedResult, state.billingRate, state.account))
+            # let's not accidentally overwrite a new d
+            d = state.d
             state.d = None
+            d.callback((state.cookie, state.encryptedResult, state.billingRate, state.account))
         else:
             logger.error("No encrypted result deferred for cookie %s. Already fired?" % state.cookie)
         
@@ -192,8 +197,10 @@ class BasicClient(object):
             logger.error("No cookie for protocolsignalskey. Should have been an error")
             return
         if state.d:
-            state.d.callback((state.cookie, key, iv))
+            # let's not accidentally overwrite state.d if it's set in the callback
+            d = state.d
             state.d = None
+            d.callback((state.cookie, key, iv))
         else:
             logger.error("No deferred for protocolSignalsKey cookie %s. Already fired?" % state.cookie)
         
@@ -240,8 +247,11 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         if fatal and self.__state:
             self.__state.state = BasicClient.STATE_ERROR
             if self.__state.d: 
-                self.__state.d.errback(Exception(msg))
+                # it's unlikey, but in case it gets set, don't
+                # overwrite
+                d = self.__state.d
                 self.__state.d = None
+                d.errback(Exception(msg))
         
     #def connectionMade(self):
         

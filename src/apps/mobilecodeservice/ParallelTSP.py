@@ -441,7 +441,7 @@ Execute 'status' to see how things are going.
         templateData["Current_Path_Count"] = currentPathCount
         addrStr = ""
         for addrData in self.ptsp.iterAddrStats():
-            addrStr += "\t\t%s\t%s\t%s\t%s\t(Not Yet Implemented)" % (addrData.addr, addrData.jobsSent, addrData.jobsCompleted, addrData.jobErrors)  
+            addrStr += "\t\t%s\t%s\t%s\t%s\t(Not Yet Implemented)\n" % (addrData.addr, addrData.jobsSent, addrData.jobsCompleted, addrData.jobErrors)  
         
         templateData["Current_Execution_Details"] = currStr
         templateData["Addr_Stats"] = addrStr
