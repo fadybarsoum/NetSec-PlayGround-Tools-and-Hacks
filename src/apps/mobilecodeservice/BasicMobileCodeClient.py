@@ -1068,7 +1068,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         picklePart = (mobileCodeResultObj.success and mobileCodeResultObj.resultPickled or mobileCodeResultObj.exceptionPickled)
         success, errMsg = self.__parallelControl.pickleBack(data.execId, mobileCodeResultObj.success, picklePart)
         if not success:
-            self.__blackList.add(data.addr())
+            self.__blackList.add(data.addr)
             logger.error("Will blacklist %s for bad computation." % data.addr)
             logger.error(picklePart)
             self.__errorWithCode("Blacklisting %s. Reason: %s" % (data.addr, errMsg), data.execId, cookie, fatal=True)
