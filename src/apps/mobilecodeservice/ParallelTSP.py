@@ -411,9 +411,20 @@ Execute 'status' to see how things are going.
             self.transport.write("%s: %s\n" % (k,v))
             
     def getSampleCodeString(self, writer, startPath, endPath, filename):
+        try:
+            startPath = int(startPath)
+        except:
+            writer("Invalid start path\n")
+            return
+        try:
+            endPath = int(endPath)
+        except:
+            writer("Invalid end path\n")
+            return
         codeStr = self.ptsp.getCodeString(startPath, endPath)
         with open(filename, "w+") as f:
             f.write(codeStr)
+        writer("Wrote file %s\n" % filename)
             
     def status(self, writer, poll=None):
         if not self.__started:
