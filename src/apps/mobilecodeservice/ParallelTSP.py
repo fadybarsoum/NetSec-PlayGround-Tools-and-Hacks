@@ -147,7 +147,8 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
     MIB_CURRENT_BEST_PATH_DISTANCE = "CurrentBestTSPPathDistance"
     MIB_CURRENT_CODE = "CurrentCode"
     
-
+    def getCodeString(self, startPath, endPath):
+        return TSPCodeTemplate % (self.__citiesStr, startPath, endPath)
     
     def __init__(self, n=40, pathsPerParallel=None):
 
@@ -267,7 +268,7 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
         end = self.__curPath + (self.__pathsPerParallel-1)
         if end > self.__maxPaths:
             end = self.__maxPaths
-        instructionStr = TSPCodeTemplate % (self.__citiesStr, self.__curPath, end)
+        instructionStr = self.getCodeString(self.__curPath, end)
         #instruction = playground.network.common.DefaultPlaygroundMobileCodeUnit(codeStr)
         id = random.randint(0,(2**64)-1)
         self.__parallelCodes[id] = [instructionStr, addr]
@@ -385,6 +386,12 @@ Execute 'status' to see how things are going.
                                                       defaultCb=self.checkBalance,
                                                       mode=CLIShell.CommandHandler.STANDARD_MODE)
         self.registerCommand(checkbalanceHandler)
+        sampleCodeString = CLIShell.CommandHandler("sample", helpTxt="Generate A sample remote code string",
+                                                   mode=CLIShell.CommandHandler.STANDARD_MODE)
+        sampleCodeString.configure(3, self.getSampleCodeString, 
+                                   helpTxt="Get a sample code string for the given parameters", 
+                                   usage="[startpath] [endpath] [filename]")
+        self.registerCommand(sampleCodeString)
         
     def __checkBalanceResponse(self, msgObj):
         self.transport.write("Current balance in account: %d\n" % msgObj.Balance)
@@ -400,6 +407,11 @@ Execute 'status' to see how things are going.
     def config(self, writer):
         for k, v in self.options.items():
             self.transport.write("%s: %s\n" % (k,v))
+            
+    def getSampleCodeString(self, startPath, endPath, filename):
+        codeStr = self.ptsp.getCodeString(startPath, endPath)
+        with open(filename, "w+") as f:
+            f.write(codeStr)
             
     def status(self, writer, poll=None):
         if not self.__started:
