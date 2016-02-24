@@ -607,7 +607,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         self.__cookies = {}
         self.__maxRuntime = self.MAX_RUN_TIME
         self.__openClients = {}
-        self.__blackListFamily = {}
+        self.__blackList = set([])
         self.__recentHistory = []
         self.__bankAddr = bankAddr
         self.__connectionFailures = {}
@@ -673,6 +673,9 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             peer = playground.network.common.PlaygroundAddress.FromString(peerString)
             if self.__openClients.has_key(peer):
                 # skip clients to whom we're already connected
+                continue
+            if peer in self.__blackList:
+                logger.info("%s is blacklisted. Skipping" % peer)
                 continue
             if self.__connectionFailures.has_key(peer):
                 logger.info("%s previously failed." % peer)
@@ -1031,20 +1034,22 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             logger.error("Decrypt Result: No encrypted data for cookie %s" % cookie)
             return #False, "No encrypted data to decrypt"
         if len(key) != 16:
+            self.__blackList.add(data.addr)
             self.__errorWithCode("Decrypt Result: Setting %s blacklisted for invalid key (len %d) for cookie %s" % 
-                        (data.addr(), len(key), cookie),
+                        (data.addr, len(key), cookie),
                         cookie=cookie,
                         fatal=True)
             #addrStats.setBlacklist()
             #self.blacklistAddr(data.addr())
             return #False, "Invalid Key Length"
         if len(iv) != 16:
+            self.__blackList.add(data.addr)
             self.__errorWithCode("Decrypt Result: Setting %s blacklisted for invalid iv (len %d) for cookie %s" % 
-                        (data.addr(), len(iv), cookie),
+                        (data.addr, len(iv), cookie),
                         cookie=cookie,
                         fatal=True)
             #addrStats.setBlacklist()
-            #self.blacklistAddr(data.addr())
+            #self.blacklistAddr(data.addr
             return #False, "Invalid IV Length"
         decrypter = AES.new(key, mode=AES.MODE_CBC, IV=iv)
         plaintext = decrypter.decrypt(encryptedData)
@@ -1053,8 +1058,9 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             mobileCodeResultPacket = MessageData.Deserialize(unpaddedData)[0]
         except Exception, e:
             #addrStats.update(data.actualRuntime(), data.costToPurchaseKey(),failed=True)
-            self.__errorWithCode("Decrypt Result: Encrypted data for cookie %s could not decrypt. Reason %s" % 
-                         (cookie, e),
+            self.__blackList.add(data.addr)
+            self.__errorWithCode("Blacklisting %s. Decrypt Result: Encrypted data for cookie %s could not decrypt. Reason %s" % 
+                         (data.addr, cookie, e),
                          cookie=cookie,
                          fatal=True)
             return #False, "Could not restore data: " + str(e)
@@ -1062,7 +1068,10 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         picklePart = (mobileCodeResultObj.success and mobileCodeResultObj.resultPickled or mobileCodeResultObj.exceptionPickled)
         success, errMsg = self.__parallelControl.pickleBack(data.execId, mobileCodeResultObj.success, picklePart)
         if not success:
-            self.__errorWithCode(errMsg, data.execId, cookie, fatal=True)
+            self.__blackList.add(data.addr())
+            logger.error("Will blacklist %s for bad computation." % data.addr)
+            logger.error(picklePart)
+            self.__errorWithCode("Blacklisting %s. Reason: %s" % (data.addr, errMsg), data.execId, cookie, fatal=True)
         elif self.__parallelControl.finished():
             self.__finishedCallback()
         else:

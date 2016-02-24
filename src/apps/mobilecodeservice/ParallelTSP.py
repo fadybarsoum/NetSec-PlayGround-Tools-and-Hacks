@@ -339,6 +339,8 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
         logger.info("exception back: %s" % str(exceptionObj))
         if not self.__parallelCodes.has_key(id):
             return False, "Unknown id %d" % id
+        addr = self.__parallelCodes[id][1]
+        self.__addrData[addr].jobErrors += 1
         self.__resubmit.append((self.__parallelCodes[id][0], id))
         self.__idsToPaths[1] = "<Needs Reassignment>"
         return False, "There shouldn't be exceptions"
