@@ -410,7 +410,7 @@ Execute 'status' to see how things are going.
         for k, v in self.options.items():
             self.transport.write("%s: %s\n" % (k,v))
             
-    def getSampleCodeString(self, startPath, endPath, filename):
+    def getSampleCodeString(self, writer, startPath, endPath, filename):
         codeStr = self.ptsp.getCodeString(startPath, endPath)
         with open(filename, "w+") as f:
             f.write(codeStr)
