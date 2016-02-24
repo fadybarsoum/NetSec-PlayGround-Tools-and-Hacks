@@ -350,28 +350,28 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     def __handleSessionOpenFailure(self, prot, msg):
         curState = self.__state and self.__state.state or "NONE"
         cookie = self.__state and self.__state.cookie or "NONE"
-        packetTrace(logger, msg, "Session Open failed. State: %s Cookie = %S" % (curState, cookie))
+        packetTrace(logger, msg, "Session Open failed. State: %s Cookie = %s" % (curState, cookie))
         msgObj = msg.data()
         return self.__error(msgObj.ErrorMessage)
     
     def __handleDecryptionKeyFailure(self, prot, msg):
         curState = self.__state and self.__state.state or "NONE"
         cookie = self.__state and self.__state.cookie or "NONE"
-        packetTrace(logger, msg, "Session Open failed. State: %s Cookie = %S" % (curState, cookie))
+        packetTrace(logger, msg, "Decryption failed. State: %s Cookie = %s" % (curState, cookie))
         msgObj = msg.data()
         return self.__error(msgObj.ErrorMessage)
     
     def __handleMobileCodeFailure(self, prot, msg):
         curState = self.__state and self.__state.state or "NONE"
         cookie = self.__state and self.__state.cookie or "NONE"
-        packetTrace(logger, msg, "Session Open failed. State: %s Cookie = %S" % (curState, cookie))
+        packetTrace(logger, msg, "Mobile Code failed. State: %s Cookie = %s" % (curState, cookie))
         msgObj = msg.data()
         return self.__error(msgObj.ErrorMessage)
     
     def __handleFailure(self, prot, msg):
         curState = self.__state and self.__state.state or "NONE"
         cookie = self.__state and self.__state.cookie or "NONE"
-        packetTrace(logger, msg, "Session Open failed. State: %s Cookie = %S" % (curState, cookie))
+        packetTrace(logger, msg, "Session Open failed. State: %s Cookie = %s" % (curState, cookie))
         msgObj = msg.data()
         return self.__error(msgObj.ErrorMessage)
     
