@@ -67,14 +67,14 @@ class PlaygroundServerProtocol(MIBServerProtocol):
         self.server = server
         self.__addressData = {}
         self.__producer = BacklogProducer()
-        self.__packetStorage = PacketStorage()
+        #self.__packetStorage = PacketStorage()
         
-    def dataReceived(self, buf):
+    """def dataReceived(self, buf):
         self.__packetStorage.update(buf)
         packet = self.__packetStorage.popPacket()
         while packet != None:
             MIBServerProtocol.dataReceived(self, packet)
-            packet = self.__packetStorage.popPacket()
+            packet = self.__packetStorage.popPacket()"""
         
     def messageReceived(self, message):
         """

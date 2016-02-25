@@ -6,6 +6,36 @@ Created on Oct 18, 2013
 import struct, random
 from Errors import *
 
+def getStreamBuffer(offset, bufs, requiredSize):
+    if not bufs:
+        # offset is local to the buffer. Reset to 0 
+        return (False, 0)
+    while (len(bufs[0])-offset) < requiredSize:
+        if len(bufs) == 1:
+            return (False, offset)
+        curBuf = bufs.pop(0)
+        bufs[0] = curBuf[offset:] + bufs[0]
+        # reset local offset to 0
+        offset = 0
+    return (True, offset)
+
+def getStreamUnpack(offset, bufs, packCode):
+    unpackSize = struct.calcsize(packCode)
+    bigEnough, offset = getStreamBuffer(offset, bufs, unpackSize)
+    if not bigEnough:
+        return (None, offset)
+    else: 
+        unpackedData = struct.unpack_from(packCode, bufs[0], offset)[0]
+        return (unpackedData, offset+unpackSize)
+    
+def trimStream(bufs, offset):
+    if not bufs:
+        return 0
+    else:
+        bufs[0] = bufs[0][offset:]
+        if not bufs[0]: bufs.pop(0)
+        return 0
+
 class ProtoFieldValue(object):
     """
     This is the core class for handling a piece of data in a network
@@ -71,6 +101,9 @@ class ProtoFieldValue(object):
         """
         return 0
     
+    def deserializeStream(self, bufs):
+        yield None
+    
 class BasicFieldValue(ProtoFieldValue):
     """
     This class represents the most common "basic" or intrinsic
@@ -124,6 +157,15 @@ class BasicFieldValue(ProtoFieldValue):
         self._data = struct.unpack_from(self.__code, buf, offset)[0]
         return struct.calcsize(self.__code)
     
+    def deserializeStream(self, bufs):
+        (data, offset) = getStreamUnpack(0, bufs, self.__code)
+        while data == None:
+            yield None
+            (data, offset) = getStreamUnpack(offset, bufs, self.__code)
+        self._data = data
+        trimStream(bufs, offset)
+        yield data
+    
 class StringFieldValue(ProtoFieldValue):
     """
     This is the only basic type that needs its own class because the
@@ -149,8 +191,20 @@ class StringFieldValue(ProtoFieldValue):
         dataLen = struct.unpack_from("!"+self.LENGTH_CODE, buf, offset)[0]
         offset += struct.calcsize("!"+self.LENGTH_CODE)
         self._data = struct.unpack_from("!"+self.STRING_CODE%dataLen, buf, offset)[0]
-        return struct.calcsize(self.STRUCT_CODE%dataLen)    
-        
+        return struct.calcsize(self.STRUCT_CODE%dataLen)
+    
+    def deserializeStream(self, bufs):
+        (dataLen, offset) = getStreamUnpack(0, bufs, "!"+self.LENGTH_CODE)
+        while dataLen == None:
+            yield None
+            (dataLen, offset) = getStreamUnpack(offset, bufs, "!"+self.LENGTH_CODE)
+        (stringVal, offset) = getStreamUnpack(offset, bufs, "!"+self.STRING_CODE%dataLen)
+        while stringVal == None:
+            yield None
+            (stringVal, offset) = getStreamUnpack(offset, bufs, "!"+self.STRING_CODE%dataLen)
+        self._data = stringVal
+        trimStream(bufs, offset)   
+        yield stringVal
 
 class ListFieldValue(ProtoFieldValue):
     """
@@ -260,6 +314,19 @@ class ListFieldValue(ProtoFieldValue):
         for elm in range(listSize):
             listOffset += self._data[elm].deserialize(buf, offset+listOffset)
         return listOffset
+    
+    def deserializeStream(self, bufs):
+        (listSize, offset) = getStreamUnpack(0, bufs, "!"+self.LENGTH_STRUCT_CODE)
+        while listSize == None:
+            yield None
+            (listSize, offset) = getStreamUnpack(offset, bufs, self.__code)
+        self.add(listSize)
+        trimStream(bufs, offset)
+        for elm in range(listSize):
+            streamIterator = self._data[elm].deserializeStream(bufs)
+            while streamIterator.next() == None:
+                yield None  
+        yield self._data
     
 class ProtoFieldAttribute(object):
     """

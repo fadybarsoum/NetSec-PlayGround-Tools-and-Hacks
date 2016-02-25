@@ -66,6 +66,7 @@ class EncryptedMobileCodeResult(MessageDefinition):
             ("Cookie",STRING),
             ("RunTime",UINT8),
             ("RunMobileCodeHash",STRING),
+            ("Success", BOOL1),
             ("EncryptedMobileCodeResultPacket",STRING)]
     
 class PurchaseDecryptionKey(MessageDefinition):

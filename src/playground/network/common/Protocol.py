@@ -5,8 +5,10 @@ Created on Oct 23, 2013
 '''
 
 from twisted.internet.protocol import Protocol as TwistedProtocol
+from twisted.internet.protocol import Factory as TwistedFactory
 
 from playground.network.message import MessageData
+from Packet import PacketStorage
 from Timer import OneshotTimer
 from playground.error import ErrorHandlingMixin
 from MIBAddress import MIBAddressMixin
@@ -30,6 +32,13 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         # There is no "TwistedProtocol.__init__"
         self._factory = factory
         self._addr = addr
+        if isinstance(factory, TwistedFactory):
+            self.__dataHandlingMode = "internet"
+            self.__packetStorage = PacketStorage()
+        else:
+            self.__dataHandlingMode = "playground"
+            self.__packetStorage = []
+            self.__streamIterator = None
         # set defaults
         self.changeTimerClass()
         
@@ -69,18 +78,57 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         """
         Subclasses should NOT overwrite this method!
         """
-        logger.debug("%s received %d bytes" % (self, len(buf)))
-        # attempt to deserialize
-        try:
-            msgBuilder, bytesConsumed = (MessageData.Deserialize(buf))
-        except Exception, e:
-            self.reportException(e, explicitReporter=Protocol.dataReceived)
-            return
-        if len(buf) != bytesConsumed:
-            self.reportError("Received extra bytes. Expected %d, but got %d" % (bytesConsumed, len(buf)))
-        if not msgBuilder:
-            self.reportError("Could not get messageBuilder. Failed.")
-        else: self.messageReceived(msgBuilder)
+        logger.info("%s received %d bytes" % (self, len(buf)))
+        if self.__dataHandlingMode == "internet":
+            self.__internetDataReceived(buf)
+        else:
+            if len(buf) > 50:
+                while buf:
+                    self.__playgroundDataReceived(buf[:50])
+                    buf = buf[50:]
+            else:
+                self.__playgroundDataReceived(buf)
+        
+    def __playgroundDataReceived(self, buf):
+        self.__packetStorage.append(buf)
+        logger.debug("New buffer received. Buffer count %s" %  len(self.__packetStorage))
+        while self.__packetStorage and self.__packetStorage[0]:
+            logger.debug("Stream deser. first buffer size is %d" % len(self.__packetStorage[0]))
+            if not self.__streamIterator:
+                self.__streamIterator = MessageData.DeserializeStream(self.__packetStorage)
+            try:
+                messageBuilder = self.__streamIterator.next()
+            except StopIteration:
+                messageBuilder = None
+                self.__streamIterator = None
+                self.reportError("Could not get messageBuilder")
+                return
+            except Exception, e:
+                self.reportException(e, explicitReporter=Protocol.dataReceived)
+                self.__streamIterator = None
+                return
+            if not messageBuilder:
+                logger.debug("Not enough bytes to completely deserialize")
+                return
+            else:
+                logger.debug("Message deserialized")
+                self.__streamIterator = None
+                self.messageReceived(messageBuilder)
+        
+    def __internetDataReceived(self, buf):
+        self.__packetStorage.update(buf)
+        packetBytes = self.__packetStorage.popPacket()
+        while packetBytes != None:
+            try:
+                msgBuilder, bytesConsumed = (MessageData.Deserialize(packetBytes))
+            except Exception, e:
+                self.reportException(e, explicitReporter=Protocol.dataReceived)
+            if not msgBuilder:
+                self.reportError("Could not get messageBuilder.")
+            else:
+                logger.info("Consumed %d bytes rebuilding %s" % (bytesConsumed, msgBuilder))
+                self.messageReceived(msgBuilder)
+            packetBytes = self.__packetStorage.popPacket()
             
     def messageReceived(self, msg):
         raise Exception("Must be implemented by subclasses")

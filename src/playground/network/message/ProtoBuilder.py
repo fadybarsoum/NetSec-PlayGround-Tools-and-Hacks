@@ -171,13 +171,47 @@ class StructuredData(ProtoFieldValue):
         return builder
     
     @staticmethod
+    def DeserializeStream(bufs):
+        nameLen, offset = getStreamUnpack(0, bufs, "!B")
+        while nameLen == None:
+            yield None
+            nameLen, offset = getStreamUnpack(offset, bufs, "!B")
+            
+        name, offset = getStreamUnpack(offset, bufs, "!%ds" % nameLen)
+        while name == None:
+            yield None
+            name, offset = getStreamUnpack(offset, bufs, "!%ds" % nameLen)
+            
+        versionLen, offset = getStreamUnpack(offset, bufs, "!B")
+        while versionLen == None:
+            yield None
+            versionLen, offset = getStreamUnpack(offset, bufs, "!B")
+            
+        version, offset = getStreamUnpack(offset, bufs, "!%ds" % versionLen)
+        while version == None:
+            yield None
+            version, offset = getStreamUnpack(offset, bufs, "!%ds" % versionLen)
+            
+        versionMajorStr, versionMinorStr = version.split(".")
+        versionTuple = (int(versionMajorStr), int(versionMinorStr))
+        
+        msgHandler = StructuredData.GetMessageBuilder(name, versionTuple)
+        if not msgHandler: 
+            yield None
+        else:
+            trimStream(bufs, offset)
+            streamIterator = msgHandler.deserializeStream(bufs)
+            while streamIterator.next() == None:
+                yield None
+            yield msgHandler
+    
+    @staticmethod
     def Deserialize(buf):
         offset = 0
         nameLen = struct.unpack_from("!B", buf, offset)[0]
         offset += struct.calcsize("!B")
         name = struct.unpack_from("!%ds" % nameLen, buf, offset)[0]
         offset += struct.calcsize("!%ds" % nameLen)
-        
         versionLen = struct.unpack_from("!B", buf, offset)[0]
         offset += struct.calcsize("!B")
         version = struct.unpack_from("!%ds" % versionLen, buf, offset)[0]
@@ -298,6 +332,38 @@ class StructuredData(ProtoFieldValue):
                                     len(version), version)
             buf = msgHeader + buf
         return buf
+    
+            
+    def deserializeStream(self, bufs):
+        """
+        Deserialize stream. Deserializes based on
+        an array of buffers that is presumed to be
+        refilled from outside the iterator. Iterates
+        None until it is fully restored, then 
+        yields itself. Will return unused bytes
+        to the buffers as a single buffer.
+        """
+        self.init()
+        # this offset is local to a given buffer in the stream
+        # an optimization only so there's less string splitting
+        offset = 0
+        (fieldCount, offset) = getStreamUnpack(offset, bufs, "!H")
+        while fieldCount == None: 
+            yield None
+            (fieldCount, offset) = getStreamUnpack(offset, bufs, "!H")
+        
+        for i in range(fieldCount):
+            (fieldID, offset) = getStreamUnpack(offset, bufs, "!H")
+            while fieldID == None: 
+                yield None
+                (fieldID, offset) = getStreamUnpack(offset, bufs, "!H")
+            offset = trimStream(bufs, offset)
+            fieldName = self.__usedTags[fieldID]
+            # get rid of the buffer up to the offset. We don't pass offset
+            streamIterator = self.__fields[fieldName].deserializeStream(bufs)
+            while streamIterator.next() == None:
+                yield None
+        yield self
     
     def deserialize(self, buf, offset=0):
         self.init()

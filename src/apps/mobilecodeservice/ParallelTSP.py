@@ -318,9 +318,9 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
         if verifiedOK: 
             self.__idsToPaths[id][2] = True
             start, end = self.__idsToPaths[id][0]
-            self.__completedPaths += (end-start)
+            self.__completedPaths += (end-start)+1
             self.__addrData[addr].jobsCompleted += 1
-            self.__addrData[addr].pathsCompleted += (end-start)
+            self.__addrData[addr].pathsCompleted += (end-start)+1
         else:
             self.__addrData[addr].jobErrors += 1
         del self.__parallelCodes[id]
@@ -395,6 +395,11 @@ Execute 'status' to see how things are going.
                                    usage="[startpath] [endpath] [filename]")
         self.registerCommand(sampleCodeString)
         
+        blacklistCommand = CLIShell.CommandHandler("blacklist", helpTxt="Get the list of blacklisted nodes",
+                                                   mode=CLIShell.CommandHandler.STANDARD_MODE,
+                                                   defaultCb=self.blacklistedAddrs)
+        self.registerCommand(blacklistCommand)
+        
     def __checkBalanceResponse(self, msgObj):
         self.transport.write("Current balance in account: %d\n" % msgObj.Balance)
         
@@ -425,6 +430,16 @@ Execute 'status' to see how things are going.
         with open(filename, "w+") as f:
             f.write(codeStr)
         writer("Wrote file %s\n" % filename)
+        
+    def blacklistedAddrs(self, writer):
+        if not self.__started:
+            self.transport.write("Can't get blacklist Not yet started\n")
+            return
+        bl = self.parallelMaster.getBlacklist()
+        writer("Blacklisted Addresses:\n")
+        for addr in bl:
+            writer("  %s\n" % addr)
+        writer("\n")
             
     def status(self, writer, poll=None):
         if not self.__started:
@@ -452,7 +467,6 @@ Execute 'status' to see how things are going.
     Currently Executing Paths: %(Current_Path_Count)s
 %(Current_Execution_Details)s
     Address Data:
-        Address    Jobs Sent    Completed Jobs    Errors    Paid
 %(Addr_Stats)s"""
         if self.ptsp.finished():
             template = ("FINISHED: %s\n" % str(self.ptsp.finalResult())) + template
@@ -460,17 +474,17 @@ Execute 'status' to see how things are going.
         templateData["Max_Path_Count"] = self.ptsp.maxPaths()
         templateData["Completed_Path_Count"] = self.ptsp.completedPathCount()
         
-        currStr = ""
+        currStr = ''
         currentExecutions = self.ptsp.currentExecutions()
         currentPathCount = 0
         for execId, paths, addr, finished in currentExecutions:
             currStr += "\t\t%s:\t%s\t%s\n" % (addr, execId, paths)
             start, end = paths
-            currentPathCount += (end-start)
+            currentPathCount += (end-start)+1
         templateData["Current_Path_Count"] = currentPathCount
-        addrStr = ""
+        addrStr =  "\t\t%-15s\t%-10s\t%-10s\t%-10s\t%s\n" % ("Address", "Jobs Sent", "Completed Jobs", "Errors", "Paid")
         for addrData in self.ptsp.iterAddrStats():
-            addrStr += "\t\t%s\t%s\t%s\t%s\t(Not Yet Implemented)\n" % (addrData.addr, addrData.jobsSent, addrData.jobsCompleted, addrData.jobErrors)  
+            addrStr += "\t\t%-15s\t%-10s\t%-10s\t%s\t(Not Yet Implemented)\n" % (addrData.addr, addrData.jobsSent, addrData.jobsCompleted, addrData.jobErrors)  
         
         templateData["Current_Execution_Details"] = currStr
         templateData["Addr_Stats"] = addrStr

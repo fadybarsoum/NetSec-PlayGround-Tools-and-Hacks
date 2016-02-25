@@ -6,6 +6,7 @@ Created on Apr 2, 2014
 import playground
 from playground.crypto import X509Certificate
 from playground.network.common import Packet, MIBAddressMixin
+from playground.network.message import definitions
 from playground.network.message import MessageData
 #from playground.network.message import definitions
 from ServiceMessages import OpenSession, SessionOpen, SessionOpenFailure, EncryptedMobileCodeResult
@@ -52,20 +53,32 @@ class WrapMobileCodeResultTransport(object):
         self.__ctx = ctx
         self.__peer = peer
         self.__host = host
+        self.__written = False
+        self.__deserialized = None
         
     def write(self, data):
+        if self.__written:
+            raise Exception("Internal Error. This should never happen")
+        self.__written = True
+        if not self.__deserialized:
+            self.__deserialized, desBytes = MessageData.Deserialize(data)
         endTime = time.time()
         runTimeInSeconds = int(endTime-self.__ctx.startTime)
         runTimeInSeconds += 1
         logger.info("Finished execution of code in %f seconds" % runTimeInSeconds)
-        encrypter = AES.new(self.__key, mode=AES.MODE_CBC, IV=self.__iv)
-        padder = playground.crypto.Pkcs7Padding(AES.block_size)
-        encrypted = encrypter.encrypt(padder.padData(data))
         response = MessageData.GetMessageBuilder(EncryptedMobileCodeResult)
         response["Cookie"].setData(self.__ctx.cookie)
         response["RunTime"].setData(runTimeInSeconds)
         response["RunMobileCodeHash"].setData(self.__ctx.runMobileCodeHash)
-        response["EncryptedMobileCodeResultPacket"].setData(encrypted)
+        if self.__deserialized.topLevelData()[0] != definitions.playground.base.MobileCodeResult.PLAYGROUND_IDENTIFIER:
+            response["Success"].setData(False)
+            response["EncryptedResult"].setData("")
+        else:
+            encrypter = AES.new(self.__key, mode=AES.MODE_CBC, IV=self.__iv)
+            padder = playground.crypto.Pkcs7Padding(AES.block_size)
+            encrypted = encrypter.encrypt(padder.padData(data))
+            response["Success"].setData(self.__deserialized["success"].data())
+            response["EncryptedMobileCodeResultPacket"].setData(encrypted)
         # in some ways, it would be easier to save "response" rather than 
         # response serialized. But we're saving this stuff to disk in case
         # of interruption or disconnect. So serialized it is.
@@ -74,6 +87,7 @@ class WrapMobileCodeResultTransport(object):
         packetTrace(logger, response, "Encrypted mobile code result ready for transmission")
         
     def writeMessage(self, m):
+        self.__deserialized = m
         self.write(m.serialize())
         
     def writeSequence(self, buffers):

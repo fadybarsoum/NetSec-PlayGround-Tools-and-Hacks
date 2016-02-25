@@ -524,7 +524,6 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
         self.__connectionMade  = connectionMadeCallback
         self.__connectionLost = connectionLostCallback
         self.__transportProducer = ClientTransportMultiplexingProducer()
-        self.__packetStorage = PacketStorage()
         
     def multiplexingProducer(self): return self.__transportProducer
         
@@ -546,12 +545,12 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
         packetTrace(logger, registerClientMsg, "Sending registration to playground server")
         self.transport.write(packetBytes)
             
-    def dataReceived(self, buf):
+    """def dataReceived(self, buf):
         self.__packetStorage.update(buf)
         packet = self.__packetStorage.popPacket()
         while packet != None:
             SimpleMIBClientProtocol.dataReceived(self, packet)
-            packet = self.__packetStorage.popPacket()
+            packet = self.__packetStorage.popPacket()"""
         
     def messageReceived(self, msg):
         packetTrace(logger, msg, "Msg received by client base protocol. Passing to handler")

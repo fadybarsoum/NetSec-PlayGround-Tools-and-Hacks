@@ -420,7 +420,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
             # Still running. Not completed yet
             self.transport.loseConnection()
             return
-        packetTrace(logger, msg, "Encrypted Result. State: %s " % self.__state.state)
+        packetTrace(logger, msg, "Encrypted Result. Cookie %s, State: %s " % (self.__state.cookie, self.__state.state))
         protocolLog(self, logger.info, "Got Encrypted Result of len %d from %s" % (len(msgObj.EncryptedMobileCodeResultPacket),
                                                                 str(self.transport.getPeer()),))
         if self.__state.cookie != msgObj.Cookie:
@@ -429,6 +429,9 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         if self.__state.codeHash != msgObj.RunMobileCodeHash:
             # don't ignore an invalid hash. Sounds like mischief
             return self.__error("Invalid code hash")
+        
+        if not msgObj.Success:
+            return self.__error("Remote code execution failed for %s. Terminating before purchase." % self.__state.cookie)
         self.__state.state = BasicClient.STATE_PURCHASE
         self.__state.encryptedResult = msgObj.EncryptedMobileCodeResultPacket
         self.__factory.protocolSignalsEncryptedResult(self.__state)
@@ -612,6 +615,9 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         self.__bankAddr = bankAddr
         self.__connectionFailures = {}
         #self.__parallelControl = parallelControl
+        
+    def getBlacklist(self):
+        return list(self.__blackList)
         
     def __loadMibs(self):
         if self.MIBAddressEnabled():
