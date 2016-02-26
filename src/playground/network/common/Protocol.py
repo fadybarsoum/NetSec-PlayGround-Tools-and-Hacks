@@ -97,15 +97,18 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                 messageBuilder = None
                 self.__streamIterator = None
                 self.reportError("Could not get messageBuilder")
-                return
+                continue
             except Exception, e:
-                logger.error("Current first 50 bytes of buf when error happened: %s" % buf[:50])
+                logger.error("Current first 50 bytes of buf when error happened: %s" % buf[:50].encode("utf-8"))
                 logger.error("Buf count %d" % len(self.__packetStorage))
                 self.reportException(e, explicitReporter=Protocol.dataReceived)
                 self.__streamIterator = None
-                return
+                # what should we do with left over bytes?!
+                continue
             if not messageBuilder:
                 logger.debug("Not enough bytes to completely deserialize")
+                # there shouldn't be any left over bytes
+                logger.debug("Remaining buffers lengths: %s" % map(len, self.__packetStorage))
                 return
             else:
                 logger.debug("Message deserialized")
