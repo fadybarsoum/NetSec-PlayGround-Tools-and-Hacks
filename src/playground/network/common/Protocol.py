@@ -82,12 +82,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         if self.__dataHandlingMode == "internet":
             self.__internetDataReceived(buf)
         else:
-            if len(buf) > 50:
-                while buf:
-                    self.__playgroundDataReceived(buf[:50])
-                    buf = buf[50:]
-            else:
-                self.__playgroundDataReceived(buf)
+            self.__playgroundDataReceived(buf)
         
     def __playgroundDataReceived(self, buf):
         self.__packetStorage.append(buf)
@@ -104,6 +99,8 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                 self.reportError("Could not get messageBuilder")
                 return
             except Exception, e:
+                logger.error("Current first 50 bytes of buf when error happened: %s" % buf[:50])
+                logger.error("Buf count %d" % len(self.__packetStorage))
                 self.reportException(e, explicitReporter=Protocol.dataReceived)
                 self.__streamIterator = None
                 return

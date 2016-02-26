@@ -33,7 +33,7 @@ def trimStream(bufs, offset):
         return 0
     else:
         bufs[0] = bufs[0][offset:]
-        if not bufs[0]: bufs.pop(0)
+        while not bufs[0]: bufs.pop(0)
         return 0
 
 class ProtoFieldValue(object):
@@ -319,7 +319,7 @@ class ListFieldValue(ProtoFieldValue):
         (listSize, offset) = getStreamUnpack(0, bufs, "!"+self.LENGTH_STRUCT_CODE)
         while listSize == None:
             yield None
-            (listSize, offset) = getStreamUnpack(offset, bufs, self.__code)
+            (listSize, offset) = getStreamUnpack(offset, bufs, "!"+self.LENGTH_STRUCT_CODE)
         self.add(listSize)
         trimStream(bufs, offset)
         for elm in range(listSize):
