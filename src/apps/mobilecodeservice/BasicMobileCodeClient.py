@@ -670,12 +670,13 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
     def peersReceived(self, peerList):
         if self.__parallelControl.finished():
             return
-        logger.info("Received addresses for running mobile code")
+        logger.info("Received %d addresses for running mobile code" % len(peerList))
         
         #print "got addresses", peerList
         #self.mcount = len(peerList)
         #instruction = playground.network.common.DefaultPlaygroundMobileCodeUnit(getRemotePiCodeString(self.n/(1.0*self.mcount)))
         for peerString in peerList:
+            logger.info("%s is in peerList" % peerString)
             peer = playground.network.common.PlaygroundAddress.FromString(peerString)
             if self.__openClients.has_key(peer):
                 # skip clients to whom we're already connected

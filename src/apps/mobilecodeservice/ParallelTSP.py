@@ -260,6 +260,7 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
             if not self.__parallelCodes.has_key(codeId): continue
             self.__parallelCodes[codeId][1] = addr
             self.__idsToPaths[codeId][1] = addr
+            self.__addrData[addr].jobsSent += 1
             return codeStr, codeId
         
         if not self.hasNext():
