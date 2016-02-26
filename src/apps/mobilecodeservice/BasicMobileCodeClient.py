@@ -159,7 +159,7 @@ class BasicClient(object):
         srcport, protocol = self.clientbase.connect(self, self.server, 
                                                     MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT)
         protocol.getResult(state)
-        OneshotTimer(lambda: self.__checkResult(state)).run(10)
+        #OneshotTimer(lambda: self.__checkResult(state)).run(10)
         
     def protocolSignalsEncryptedResult(self, state):
         # if the server wasn't ready, runtime, codeHash, and encryptedResult are None
@@ -399,9 +399,10 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
             protocolLog(self, logger.info, "Got a MobileCodeAck letting us know the code isn't ready")
             if hasattr(msgObj, "Message") and msgObj.Message:
                 logger.info("ACK message: %s" % msgObj.Message)
+            self.__factory.protocolSignalsMobileCodeAccepted(self.__state)
         self.transport.loseConnection()
         
-    def getResult(self, state):
+    def getResult(self, state, timeout=None):
         if state.state != BasicClient.STATE_RUNNING:
             raise Exception("Cannot call 'getResult' unless in running state")
         request = MessageData.GetMessageBuilder(CheckMobileCodeResult)

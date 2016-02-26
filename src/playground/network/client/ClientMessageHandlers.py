@@ -210,7 +210,8 @@ class Client2ClientHandler(object):
             if connectionResult == False:
                 """ Either couldn't spawn because we're not a listening socket
                 or there was another kind of error """
-                protocol.reportError("Could not spawn connection: " + str(resultArg))
+                protocol.reportError("Could not spawn connection for c2c from %s to port %d: %s" % 
+                                     (peerAddressPair, dstPort, str(resultArg)))
                 packetTrace(logger, msg, "Could not spawn connection on port %d. Packet dropped." % dstPort)
                 return
             
