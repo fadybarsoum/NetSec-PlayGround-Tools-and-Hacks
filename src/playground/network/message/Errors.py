@@ -113,3 +113,9 @@ class InvalidProtocolDefinition(NetworkMessageException):
     This exception is raised when an unknown protocol message
     is requested.
     """
+    
+class DeserializationError(NetworkMessageException):
+    def __init__(self, e, msg, partialMsgHandler):
+        Exception.__init__(self, msg)
+        self.e = e
+        self.msgHandler = partialMsgHandler

@@ -7,6 +7,7 @@ Created on Oct 18, 2013
 from ProtoFieldBuilder import *
 from StandardMessageSpecifiers import OPTIONAL, REQUIRED, UINT8, DEFAULT_RANDOM8
 from Errors import *
+import traceback
 
 def resolveDottedKey(dottedKey, toplevelDictionary):
     """
@@ -172,38 +173,44 @@ class StructuredData(ProtoFieldValue):
     
     @staticmethod
     def DeserializeStream(bufs):
-        nameLen, offset = getStreamUnpack(0, bufs, "!B")
-        while nameLen == None:
-            yield None
-            nameLen, offset = getStreamUnpack(offset, bufs, "!B")
-            
-        name, offset = getStreamUnpack(offset, bufs, "!%ds" % nameLen)
-        while name == None:
-            yield None
-            name, offset = getStreamUnpack(offset, bufs, "!%ds" % nameLen)
-            
-        versionLen, offset = getStreamUnpack(offset, bufs, "!B")
-        while versionLen == None:
-            yield None
-            versionLen, offset = getStreamUnpack(offset, bufs, "!B")
-            
-        version, offset = getStreamUnpack(offset, bufs, "!%ds" % versionLen)
-        while version == None:
-            yield None
-            version, offset = getStreamUnpack(offset, bufs, "!%ds" % versionLen)
-            
-        versionMajorStr, versionMinorStr = version.split(".")
-        versionTuple = (int(versionMajorStr), int(versionMinorStr))
-        
-        msgHandler = StructuredData.GetMessageBuilder(name, versionTuple)
-        if not msgHandler: 
-            yield None
-        else:
-            trimStream(bufs, offset)
-            streamIterator = msgHandler.deserializeStream(bufs)
-            while streamIterator.next() == None:
+        try:
+            msgHandler = None
+            nameLen, offset = getStreamUnpack(0, bufs, "!B")
+            while nameLen == None:
                 yield None
-            yield msgHandler
+                nameLen, offset = getStreamUnpack(offset, bufs, "!B")
+                
+            name, offset = getStreamUnpack(offset, bufs, "!%ds" % nameLen)
+            while name == None:
+                yield None
+                name, offset = getStreamUnpack(offset, bufs, "!%ds" % nameLen)
+                
+            versionLen, offset = getStreamUnpack(offset, bufs, "!B")
+            while versionLen == None:
+                yield None
+                versionLen, offset = getStreamUnpack(offset, bufs, "!B")
+                
+            version, offset = getStreamUnpack(offset, bufs, "!%ds" % versionLen)
+            while version == None:
+                yield None
+                version, offset = getStreamUnpack(offset, bufs, "!%ds" % versionLen)
+                
+            versionMajorStr, versionMinorStr = version.split(".")
+            versionTuple = (int(versionMajorStr), int(versionMinorStr))
+            
+            msgHandler = StructuredData.GetMessageBuilder(name, versionTuple)
+            if not msgHandler: 
+                yield None
+            else:
+                trimStream(bufs, offset)
+                streamIterator = msgHandler.deserializeStream(bufs)
+                while streamIterator.next() == None:
+                    yield None
+                yield msgHandler
+        except Exception, e:
+            msg = "Deserialization failed: %s\n" % e
+            msg += traceback.format_exc()
+            raise DeserializationError(e, msg, msgHandler)
     
     @staticmethod
     def Deserialize(buf):

@@ -99,12 +99,16 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                 self.reportError("Could not get messageBuilder")
                 continue
             except Exception, e:
-                logger.error("Current first 50 bytes of buf when error happened: %s" % unicode(buf[:50],errors='ignore'))
+                logger.error("Deserialization error in protocol")
+                logger.error("Current first 100 bytes of buf when error happened: %s" % unicode(buf[:100],errors='ignore'))
                 logger.error("Buf count %d" % len(self.__packetStorage))
                 self.reportException(e, explicitReporter=Protocol.dataReceived)
                 self.__streamIterator = None
                 # what should we do with left over bytes?!
-                continue
+                # It's likely the protocol is toast. Let's try shutting down?
+                logger.error("Trying to shutdown messed up connection")
+                if self.transport:
+                    self.transport.loseConnection()
             if not messageBuilder:
                 logger.debug("Not enough bytes to completely deserialize")
                 # there shouldn't be any left over bytes
