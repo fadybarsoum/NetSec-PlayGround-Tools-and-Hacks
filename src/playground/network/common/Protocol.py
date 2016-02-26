@@ -99,7 +99,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                 self.reportError("Could not get messageBuilder")
                 continue
             except Exception, e:
-                logger.error("Current first 50 bytes of buf when error happened: %s" % buf[:50].encode("utf-8"))
+                logger.error("Current first 50 bytes of buf when error happened: %s" % unicode(buf[:50],errors='ignore'))
                 logger.error("Buf count %d" % len(self.__packetStorage))
                 self.reportException(e, explicitReporter=Protocol.dataReceived)
                 self.__streamIterator = None
