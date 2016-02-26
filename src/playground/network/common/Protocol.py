@@ -109,6 +109,9 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                 logger.error("Trying to shutdown messed up connection")
                 if self.transport:
                     self.transport.loseConnection()
+                # but one way or another, kill the bufs and return
+                self.__packetStorage = []
+                return
             if not messageBuilder:
                 logger.debug("Not enough bytes to completely deserialize")
                 # there shouldn't be any left over bytes
