@@ -33,7 +33,7 @@ def trimStream(bufs, offset):
         return 0
     else:
         bufs[0] = bufs[0][offset:]
-        while not bufs[0]: bufs.pop(0)
+        while bufs and not bufs[0]: bufs.pop(0)
         return 0
 
 class ProtoFieldValue(object):
