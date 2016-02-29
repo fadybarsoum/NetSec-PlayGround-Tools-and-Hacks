@@ -197,7 +197,8 @@ class ClientTest(object):
             srcPort, self.__protocol = client.connect(echoProtocolClient, echoServerAddr, 101)
         message = raw_input("Message to send to %s (quit to exit): " % echoServerAddr)
         if message.lower().strip() == "quit":
-            self.__protocol.loseConnection()
+            if self.__protocol.transport:
+                self.__protocol.transport.loseConnection()
             self.exit()
             return
         else:
