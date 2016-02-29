@@ -170,8 +170,11 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
         message handler. It simply calls any callbacks deferred
         to calling code.
         """
-        if self.__d: 
-            self.__d.callback(None)
+        if self.__d:
+            d = self.__d
+            self.__d = None
+            # We do this first, because self.__d could get set by callback 
+            d.callback(None)
             self.__d = None
         
 class EchoServer(ClientApplicationServer):
