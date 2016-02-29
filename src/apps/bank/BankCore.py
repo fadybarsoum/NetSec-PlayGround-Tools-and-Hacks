@@ -110,7 +110,7 @@ class LedgerLine(object):
             amount = self.__accounts[account][1]
             if amount < 0: fromAccounts.append(account)
             elif amount > 0: toAccounts.append(account)
-        if forAccount not in (fromAccounts + toAccounts):
+        if forAccount != None and forAccount not in (fromAccounts + toAccounts):
             return "(Null)\n"
         str = "Transfer "
         for account in fromAccounts:
@@ -399,6 +399,8 @@ class Ledger(PermanentObjectMixin):
             return LedgerOperationFailure("Already in a bad state. Circulation does not match deposits")
         if not type(amount) == int or amount < 0:
             return LedgerOperationFailure("Amount must be a positive integer.")
+        if amount < self.getBalance(account):
+            return LedgerOperationFailure("Not enough BitPoints in account %s to withdraw %d" % (account, amount))
         bitpointKeys = self.__vault.keys()[:amount]
         if len(bitpointKeys) < amount:
             return LedgerOperationFailure("Not enough Bitpoints in the vault for withdrawl")
