@@ -175,7 +175,6 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
             self.__d = None
             # We do this first, because self.__d could get set by callback 
             d.callback(None)
-            self.__d = None
         
 class EchoServer(ClientApplicationServer):
     Protocol=EchoServerProtocol
