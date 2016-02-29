@@ -31,7 +31,9 @@ from playground.network.client import ClientBase
 # Server and Client Protocol factories
 from playground.network.client.ClientApplicationServer import ClientApplicationServer, ClientApplicationClient
 
-import sys
+from twisted.internet import defer
+
+import sys, time
 
 class EchoProtocolMessage(MessageDefinition):
     """
@@ -69,9 +71,11 @@ class EchoServerProtocol(SimpleMessageHandlingProtocol):
         # Register "self.__handleEchoMessage" as a handler for messages of type
         # "EchoProtocolMessage"
         self.registerMessageHandler(EchoProtocolMessage, self.__handleEchoMessage)
+        self.lastMessage = 0
     
     def __handleEchoMessage(self, protocol, msg):
         
+        self.lastMessage = time.time()
         # Convert the "message builder" version of the message into a simple data structure
         msgObj = msg.data()
         
@@ -87,6 +91,15 @@ class EchoServerProtocol(SimpleMessageHandlingProtocol):
         # is of type  ClientApplicationTransport. Internally, it is wrapping your message
         # into a Client-to-Client message.
         self.transport.writeMessage(responseMessageBuilder)
+        self.callLater(30, self.__checkConnection)
+        
+    def __checkConnection(self):
+        if not self.transport: return
+        if time.time() > self.__lastMessage + 30:
+            self.transport.loseConnection()
+            self.transport = None
+        else: self.callLater(30, self.__checkConnection)
+        
         
 class EchoClientResponse_StdOutHandler(object):
     """
@@ -96,15 +109,19 @@ class EchoClientResponse_StdOutHandler(object):
     that would record the result to a file.
     """
     
-    def __init__(self, banner):
+    def __init__(self, banner, chainedCb):
         """
         The constructor takes a "banner" argument that is used to printout 
         the response.
+        
+        The chained call back is called after this one
         """
         self.__banner = banner
+        self.__chainedCb = chainedCb
         
     def __call__(self, protocol, msg):
         print("%s: %s" % (self.__banner, msg.data().data))
+        self.__chainedCb(protocol, msg)
         
         
 class EchoClientProtocol(SimpleMessageHandlingProtocol):
@@ -116,9 +133,12 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
         SimpleMessageHandlingProtocol.__init__(self, factory, addr)
         
         # Set self.__handleServerResponse as a handler for the EchoProtocolMessage
-        self.registerMessageHandler(EchoProtocolMessage, EchoClientResponse_StdOutHandler("GOT RESPONSE FROM SERVER:"))
+        self.registerMessageHandler(EchoProtocolMessage, 
+                                    EchoClientResponse_StdOutHandler("GOT RESPONSE FROM SERVER: ",
+                                                                     self.__nextCallback))
         self.__connected = False
         self.__backlog = []
+        self.__d = None
         
     def connectionMade(self):
         self.__connected = True
@@ -126,10 +146,12 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
             self.__sendMessageActual(m)
         
     def sendMessage(self, msg):
+        self.__d = defer.Deferred()
         if self.__connected:
             self.__sendMessageActual(msg)
         else:
             self.__backlog.append(msg)
+        return self.__d
         
     def __sendMessageActual(self, msg):
         # Get the builder for the EchoProtocolMessage
@@ -142,6 +164,16 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
         # In this example, instead of calling transport.writeMessage, we serialize ourselves
         self.transport.write(echoMessageBuilder.serialize())
         
+    def __nextCallback(self, protocol, msg):
+        """
+        This callback is given as a chained callback to the 
+        message handler. It simply calls any callbacks deferred
+        to calling code.
+        """
+        if self.__d: 
+            self.__d.callback(None)
+            self.__d = None
+        
 class EchoServer(ClientApplicationServer):
     Protocol=EchoServerProtocol
     
@@ -153,13 +185,28 @@ class ClientTest(object):
     This class is used to test sending a bunch of messages over
     the echo protocol.
     """
-    def __init__(self, messagesToSend):
-        self.messagesToSend = messagesToSend
+    def __init__(self, client, echoServerAddr):
+        self.__client = client
+        self.__echoServerAddr = echoServerAddr
+        self.__protocol = None
         
-    def sendMessages(self, client, echoServerAddr):
-        srcPort, protocol = client.connect(echoProtocolClient, echoServerAddr, 101)
-        for message in self.messagesToSend:
-            protocol.sendMessage(message)
+    def getMessageAndSend(self):
+        if not self.__protocol:
+            srcPort, self.__protocol = client.connect(echoProtocolClient, echoServerAddr, 101)
+        message = raw_input("Message to send to %s (quit to exit): " % echoServerAddr)
+        if message.lower().strip() == "quit":
+            self.__protocol.loseConnection()
+            self.exit()
+            return
+        else:
+            d = self.__protocol.sendMessage(message)
+            d.addCallback(lambda result: self.getMessageAndSend())
+        
+    def exit(self):
+        if self.__client:
+            self.__client.disconnectFromPlaygroundServer(stopReactor=True)
+            self.__client = None
+        
 
 USAGE = """usage: echotest <playgroundAddr> <chaperone addr> <mode>
   mode is either 'server' or a server's address (client mode)"""
@@ -206,16 +253,10 @@ if __name__=="__main__":
         
         # Create a echoProtocolClient (factory)
         echoProtocolClient = EchoClientFactory()
-        
-        # Create a tester with five strings:
-        print("Enter five strings to send over echo protocol:")
-        messagesToSend = []
-        for i in range(5):
-            messagesToSend.append( raw_input("\tMessage %d:" % i))
-        tester=ClientTest(messagesToSend)
+        tester = ClientTest(client, echoServerAddr)
         
         # Tell the playground node to run this function when connected to PLAYGROUND
-        client.runWhenConnected(lambda: tester.sendMessages(client, echoServerAddr))
+        client.runWhenConnected(tester.getMessageAndSend)
         
         # Connect to Playground and go
         client.connectToChaperone(chaperoneAddr, chaperonePort)
