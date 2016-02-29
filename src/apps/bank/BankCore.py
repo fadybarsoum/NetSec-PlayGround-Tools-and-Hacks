@@ -399,7 +399,7 @@ class Ledger(PermanentObjectMixin):
             return LedgerOperationFailure("Already in a bad state. Circulation does not match deposits")
         if not type(amount) == int or amount < 0:
             return LedgerOperationFailure("Amount must be a positive integer.")
-        if amount < self.getBalance(account):
+        if amount > self.getBalance(account):
             return LedgerOperationFailure("Not enough BitPoints in account %s to withdraw %d" % (account, amount))
         bitpointKeys = self.__vault.keys()[:amount]
         if len(bitpointKeys) < amount:
