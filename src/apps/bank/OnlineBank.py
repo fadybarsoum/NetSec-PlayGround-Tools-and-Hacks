@@ -499,7 +499,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
                 errorResponse["ErrorMessage"].setData("Username invalid. Only letters, numbers, and underscores.")
                 self.transport.writeMessage(errorResponse)
                 return
-            elif not newUser and not self.__pwDb.has(userName):
+            elif not newUser and not self.__pwDb.has_key(userName):
                 errorResponse["ErrorMessage"].setData("User %s does not exist" % userName)
                 self.transport.writeMessage(errorResponse)
                 return
@@ -1066,7 +1066,7 @@ class PlaygroundOnlineBank(playground.network.client.ClientApplicationServer.Cli
         if mib.endswith(self.MIB_BALANCES):
             balances = []
             for account in self.__bank.getAccounts():
-                balances.append("%s: %s (b^)" % (account, str(bank.getBalance(account))))
+                balances.append("%s: %s (b^)" % (account, str(self.__bank.getBalance(account))))
             return balances
         return []
         
@@ -1435,7 +1435,7 @@ class AdminBankCLIClient(CLIShell, ErrorHandler):
         self.__d.addErrback(self.__failed)
         
     def __userPasswd(self, writer, userName=None):
-        if userName:
+        if not userName:
             oldPassword = getpass.getpass("Enter current account password: ")
         else:
             if not self.__admin:
