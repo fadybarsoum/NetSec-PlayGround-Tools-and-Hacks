@@ -499,7 +499,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
                 errorResponse["ErrorMessage"].setData("Username invalid. Only letters, numbers, and underscores.")
                 self.transport.writeMessage(errorResponse)
                 return
-            elif not newUser and not self.__pwDb.has_key(userName):
+            elif not newUser and not self.__pwDb.hasUser(userName):
                 errorResponse["ErrorMessage"].setData("User %s does not exist" % userName)
                 self.transport.writeMessage(errorResponse)
                 return
