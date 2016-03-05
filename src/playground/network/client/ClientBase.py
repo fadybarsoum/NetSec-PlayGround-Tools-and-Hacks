@@ -554,6 +554,9 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
         
     def messageReceived(self, msg):
         packetTrace(logger, msg, "Msg received by client base protocol. Passing to handler")
+        if not self.__client:
+            logger.error("Message received after connection closed.")
+            return
         
         try:
             success = self.handleMessage(self, msg)
