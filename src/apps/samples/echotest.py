@@ -95,7 +95,7 @@ class EchoServerProtocol(SimpleMessageHandlingProtocol):
         
     def __checkConnection(self):
         if not self.transport: return
-        if time.time() > self.__lastMessage + 30:
+        if time.time() > self.lastMessage + 30:
             self.transport.loseConnection()
             self.transport = None
         else: self.callLater(30, self.__checkConnection)
