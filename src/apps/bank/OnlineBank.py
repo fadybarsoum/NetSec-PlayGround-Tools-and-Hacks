@@ -1200,7 +1200,7 @@ class AdminBankCLIClient(CLIShell, ErrorHandler):
             responseTxt = "Received a receipt with mismatching signature\n"
             responseTxt += "Please report this to the bank administrator\n"
             responseTxt += "Quitting\n"
-            self.trasnport.write(responseTxt)
+            self.transport.write(responseTxt)
             self.quit()
         else:
             self.transport.write("Valid receipt received. Transaction complete.")
