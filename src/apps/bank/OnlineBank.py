@@ -1872,6 +1872,19 @@ if __name__ == "__main__":
                 print "current privileges", pwDB.currentAccess(userName, accountName)
         pwDB.sync()
         sys.exit("Finished.")
+    elif sys.argv[1] == "verify_receipt":
+        certfile = sys.argv[2]
+        receipt = sys.argv[3]
+        receiptSig = sys.argv[4]
+        with open(certfile) as f:
+            cert = X509Certificate.loadPEM(f.read())
+        rsaKey = RSA.importKey(cert.getPublicKeyBlob())
+        verifier = PKCS1_v1_5.new(rsaKey)
+        with open(receipt) as f:
+            receiptData = f.read()
+        with open(receiptSig) as f:
+            receiptSigData = f.read()
+        print "Verification result = ", verifier.verify(SHA.new(receiptData), receiptSigData)
     elif sys.argv[1] in ["server", "client"]:
         bankAddr = playground.network.common.PlaygroundAddress.FromString(sys.argv[2])
         chaperoneAddr = sys.argv[3]
