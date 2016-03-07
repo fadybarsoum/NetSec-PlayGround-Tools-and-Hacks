@@ -1604,10 +1604,6 @@ class PlaygroundNodeControl(object):
             if not result.succeeded():
                 print "Could not load certificate", result.msg()
         self.__mode = "server"
-        logctx = LoggingContext()
-        logctx.nodeId = "onlinebank_"+BANK_FIXED_PLAYGROUND_ADDR.toString()
-        #logctx.doPacketTracing = True
-        playground.playgroundlog.startLogging(logctx)
         return (True,"")
     
     def processClient(self, clientArgs):
@@ -1637,10 +1633,6 @@ class PlaygroundNodeControl(object):
                                        connectionType)
         self.__stdioUI = uiFactory
         self.__mode = "client"
-        logctx = LoggingContext()
-        logctx.nodeId = loginName+"_bankclient_"+BANK_FIXED_PLAYGROUND_ADDR.toString()
-        #logctx.doPacketTracing = True
-        playground.playgroundlog.startLogging(logctx)
         return (True, "")
     
     def getStdioProtocol(self):
