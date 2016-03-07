@@ -482,6 +482,8 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         errorResponse["RequestId"].setData(msgObj.RequestId)
         okResponse = self.__createResponse(msgObj, RequestSucceeded)
         okResponse["RequestId"].setData(msgObj.RequestId)
+        if not userName:
+            userName = self.__connData["LoginName"]
         
         if (newUser or userName != self.__connData["LoginName"]):
             # if this is a new user, must be admin because couldn't login
