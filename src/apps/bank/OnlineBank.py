@@ -478,6 +478,8 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         userName = msgObj.loginName
         newUser = msgObj.NewUser
+        logger.info("Received change password request. Current user %s, user to change [%s]" % 
+                    (self.__connData["LoginName"], userName))
         errorResponse = self.__createResponse(msgObj, RequestFailure)
         errorResponse["RequestId"].setData(msgObj.RequestId)
         okResponse = self.__createResponse(msgObj, RequestSucceeded)
