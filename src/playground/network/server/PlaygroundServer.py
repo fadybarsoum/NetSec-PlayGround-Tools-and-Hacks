@@ -17,7 +17,7 @@ from twisted.internet import reactor
 
 from ServerMessageHandlers import *
 
-import random, os, array
+import random, os, array, copy
 
 class BacklogProducer(object):
     def __init__(self):
@@ -100,6 +100,18 @@ class PlaygroundServerProtocol(MIBServerProtocol):
     def producerWrite(self, msg):
         self.__producer.write(msg)
         
+class ServerStatistics(object):
+    def __init__(self):
+        self.bytesRouted = 0
+        self.packetsRouted = 0
+        self.bytesCorrupted = 0
+        self.packetsCorrupted = 0
+        self.packetsDropped = 0
+        self.zeroTime = time.time()
+        
+    def elapsed(self):
+        return time.time()-self.zeroTime
+        
 class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler, 
                        StandardMIBProtocolAuthenticationMixin, ErrorHandlingMixin):
     """
@@ -108,6 +120,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
     you can pass this class (which is a Twisted Factory) to the Twisted reactor
     in a customized fashion.
     """
+    MAX_BYTES_BEFORE_OVERFLOW = 2**64
     
     CURRENT_CONNECTIONS_MIB = ("playground.network.server","CurrentConnections")
     
@@ -142,6 +155,10 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
                                     playground.base.GetPeers,
                                     GetPeersHandler(self, self.__addressToConnection))
         self.__loadMibs()
+        self.__resetStatistics()
+        
+    def __resetStatistics(self):
+        self.__statistics = ServerStatistics()
         
     def __loadMibs(self):
         MIBServerImpl.registerMIB(self, self.CURRENT_CONNECTIONS_MIB[0], self.CURRENT_CONNECTIONS_MIB[1], self.__currentConnections)
@@ -163,6 +180,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
         for i in range(actualErrors):
             self.__errorBytes.append(random.choice(errorByteGenerator))
         self.__errorBytes.sort()
+        #print "computed error bytes count", len(self.__errorBytes)
             
     def __computeLostPackets(self):
         self.__pktCounter = 0
@@ -209,9 +227,12 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
                 raise Exception("Shouldn't happen")
             if curPacket in self.__lostPackets:
                 #print "Dropping current packet"
+                self.updateStatistics(len(serializedMessage), 1, 0, 0, 1)
                 return ""
         
+        bytesCorrupted = 0
         if self.__errorRate[2] > 0:
+            #print "computing byte errors. Byte counter", self.__byteCounter
             messageArray = array.array('B', serializedMessage)
             byteIndex = 0
             while byteIndex < len(messageArray):
@@ -220,17 +241,22 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
                 bytesToCorrupt = min(len(messageArray)-byteIndex, self.__errorRate[2] - self.__byteCounter)
                 
                 # while we have error bytes and they're inside our number of bytes to corrupt
-                while self.__errorBytes and self.__errorBytes[0] < (byteIndex + bytesToCorrupt):
-                    byteToCorrupt = self.__errorBytes.pop(0) - byteIndex
-                    #print "Corrupting byte %d in packet" % byteToCorrupt
-                    messageArray[byteIndex+byteToCorrupt] ^= 0xff
+                while self.__errorBytes and self.__errorBytes[0] < (self.__byteCounter + bytesToCorrupt):
+                    byteToCorrupt = self.__errorBytes.pop(0) - self.__byteCounter
+                    #print "Corrupting byte %d in packet chunk of len %d" % (byteToCorrupt, len(messageArray)-byteIndex)
+                    messageArray[byteToCorrupt] ^= 0xff
+                    bytesCorrupted += 1
                 self.__byteCounter += bytesToCorrupt
                 byteIndex += bytesToCorrupt
                 if self.__byteCounter == self.__errorRate[2]:
+                    #if self.__errorBytes:
+                    #    print "oddly, we're recomputing bytes before finished.", len(self.__errorBytes)
                     self.__computeErrorBytes()
                 elif self.__byteCounter > self.__errorRate[2]:
                     raise Exception("Shouldn't happen")
             serializedMessage = messageArray.tostring()
+        packetCorrupted = bytesCorrupted > 0 and 1 or 0
+        self.updateStatistics(len(serializedMessage), 1, bytesCorrupted, packetCorrupted, 0)
         return serializedMessage
     
     
@@ -241,6 +267,18 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
     def setNetworkLossRate(self, minLossInN, maxLossInN, n):
         self.__lossRate = (minLossInN, maxLossInN, n)
         self.__computeLostPackets()
+        
+    def updateStatistics(self, bytes, packets, errorBytes, corruptedPackets, droppedPackets):
+        if self.__statistics.bytesRouted + bytes > self.MAX_BYTES_BEFORE_OVERFLOW:
+            self.__resetStatistics()
+        self.__statistics.bytesRouted += bytes
+        self.__statistics.packetsRouted += packets
+        self.__statistics.bytesCorrupted += errorBytes
+        self.__statistics.packetsDropped += droppedPackets
+        self.__statistics.packetsCorrupted += corruptedPackets
+        
+    def statistics(self):
+        return copy.copy(self.__statistics)
         
     def buildProtocol(self, address):
         newProtocol = PlaygroundServerProtocol(self)
@@ -259,7 +297,13 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
                 self.__unregisterAddressProtocolPair(address, protocol)
             del self.__connectionToAddress[protocol]
         
+    def callLater(self, delay, cb):
+        reactor.callLater(delay, cb)
+        
     def run(self):
         endpoint = TCP4ServerEndpoint(reactor, self.__tcpPort)
         endpoint.listen(self)
         reactor.run()
+        
+    def stop(self):
+        reactor.stop()
