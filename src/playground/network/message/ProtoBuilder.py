@@ -385,7 +385,10 @@ class StructuredData(ProtoFieldValue):
         return structOffset
     
     def __str__(self):
-        return "<%s(%s) %d" % (self.__defClass.PLAYGROUND_IDENTIFIER, self.__defClass.MESSAGE_VERSION, id(self))
+        identifier = "ptr :%d" % id(self)
+        if self.__fields.has_key("playground_msgID"):
+            identifier = "msgId :%s" % str(self.__fields["playground_msgID"].data())
+        return "<%s(%s) %s" % (self.__defClass.PLAYGROUND_IDENTIFIER, self.__defClass.MESSAGE_VERSION, identifier)
     
     def __repr__(self):
         return str(self)
