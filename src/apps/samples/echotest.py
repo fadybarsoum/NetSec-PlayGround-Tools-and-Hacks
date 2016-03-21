@@ -31,9 +31,10 @@ from playground.network.client import ClientBase
 # Server and Client Protocol factories
 from playground.network.client.ClientApplicationServer import ClientApplicationServer, ClientApplicationClient
 
-from twisted.internet import defer
+from twisted.internet import defer, stdio
+from twisted.protocols import basic
 
-import sys, time
+import sys, time, os
 
 class EchoProtocolMessage(MessageDefinition):
     """
@@ -91,13 +92,20 @@ class EchoServerProtocol(SimpleMessageHandlingProtocol):
         # is of type  ClientApplicationTransport. Internally, it is wrapping your message
         # into a Client-to-Client message.
         self.transport.writeMessage(responseMessageBuilder)
-        self.callLater(30, self.__checkConnection)
+        if msgObj.data == "__QUIT__":
+            self.callLater(0, self.__closeConnection)
+        else:
+            self.callLater(60, self.__checkConnection)
+        
+    def __closeConnection(self):
+        if not self.transport: return
+        self.transport.loseConnection()
+        self.transport = None
         
     def __checkConnection(self):
         if not self.transport: return
         if time.time() > self.lastMessage + 30:
-            self.transport.loseConnection()
-            self.transport = None
+            self.__closeConnection()
         else: self.callLater(30, self.__checkConnection)
         
         
@@ -139,11 +147,31 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
         self.__connected = False
         self.__backlog = []
         self.__d = None
+        self.__closeD = defer.Deferred()
+        self.__connectD = defer.Deferred()
+        
+    def close(self):
+        self.__sendMessageActual("__QUIT__")
+    
+    def notifyClosed(self):
+        return self.__closeD
+    
+    def notifyConnected(self):
+        if self.__connected: return True
+        return self.__connectD
+    
+    def connectionLost(self, reason=None):
+        if self.__closeD:
+            d = self.__closeD
+            self.__closeD = None
+            # We do this first, because self.__d could get set by callback 
+            d.callback(reason)
         
     def connectionMade(self):
         self.__connected = True
         for m in self.__backlog:
             self.__sendMessageActual(m)
+        self.__connectD.callback(True)
         
     def sendMessage(self, msg):
         self.__d = defer.Deferred()
@@ -181,37 +209,64 @@ class EchoServer(ClientApplicationServer):
     
 class EchoClientFactory(ClientApplicationClient):
     Protocol=EchoClientProtocol
-
-class ClientTest(object):
+    
+class ClientTest(basic.LineReceiver):
     """
     This class is used to test sending a bunch of messages over
     the echo protocol.
     """
-    def __init__(self, client, echoServerAddr):
+    delimiter = os.linesep
+    
+    def __init__(self, client, echoServerAddr, connectionType="RAW"):
+        
         self.__client = client
         self.__echoServerAddr = echoServerAddr
         self.__protocol = None
+        self.__d = None
+        self.__connectionType = connectionType
         
-    def getMessageAndSend(self):
-        if not self.__protocol:
-            srcPort, self.__protocol = client.connect(echoProtocolClient, echoServerAddr, 101)
-        message = raw_input("Message to send to %s (quit to exit): " % echoServerAddr)
-        if message.lower().strip() == "quit":
-            if self.__protocol.transport:
-                self.__protocol.transport.loseConnection()
-            self.exit()
+    def connectionMade(self):
+        srcPort, self.__protocol = client.connect(EchoClientFactory(), echoServerAddr, 101,
+                                                      connectionType=self.__connectionType)
+        print "Waiting for server."
+        d1 = self.__protocol.notifyClosed()
+        d1.addCallback(self.exit)
+        d2 = self.__protocol.notifyConnected()
+        if d2 == True:
+            self.echoConnectionMade(True)
+        else:
+            d2.addCallback(self.echoConnectionMade)
+            
+    def echoConnectionMade(self, status):
+        self.transport.write("Message to send to %s (quit to exit): " % self.__echoServerAddr)
+        
+    def lineReceived(self, line):
+        if self.__d:
+            self.transport.write("Waiting for previous echo. (Ctrl-C if it's stuck)\n")
+            return
+        message = line
+        if message.lower().strip() in ["quit", "__quit__"]:
+            self.__protocol.close()
+            self.__d = defer.Deferred() # empty place holder while we wait for close
             return
         else:
-            d = self.__protocol.sendMessage(message)
-            d.addCallback(lambda result: self.getMessageAndSend())
+            self.__d = self.__protocol.sendMessage(message)
+            self.__d.addCallback(lambda result: self.reset())
+            
+    def reset(self):
+        self.__d = None
+        self.transport.write("\nMessage to send to %s (quit to exit): " % self.__echoServerAddr)
         
-    def exit(self):
+    def exit(self, reason=None):
+        print "Shutdown of echo test client. Reason =", reason
+        if self.transport:
+            self.transport.loseConnection()
         if self.__client:
             self.__client.disconnectFromPlaygroundServer(stopReactor=True)
             self.__client = None
         
 
-USAGE = """usage: echotest <playgroundAddr> <chaperone addr> <mode>
+USAGE = """usage: echotest <playgroundAddr> <chaperone addr> <mode> [STREAM_TYPE]
   mode is either 'server' or a server's address (client mode)"""
 
 if __name__=="__main__":
@@ -219,6 +274,10 @@ if __name__=="__main__":
         playgroundAddr, chaperoneAddr, mode = sys.argv[1:4]
     except:
         sys.exit(USAGE)
+    if len(sys.argv) == 5:
+        connectionType = sys.argv[4]
+    else:
+        connectionType = "RAW"
 
     myAddress = PlaygroundAddress.FromString(playgroundAddr)
     
@@ -241,7 +300,7 @@ if __name__=="__main__":
         echoProtocolServer = EchoServer()
         
         # install the echoProtocolServer (factory) on playground port 101
-        client.listen(echoProtocolServer, 101)
+        client.listen(echoProtocolServer, 101, connectionType=connectionType)
         
         # tell the playground client to connect to playground server and start running
         client.connectToChaperone(chaperoneAddr, chaperonePort)
@@ -254,12 +313,9 @@ if __name__=="__main__":
             sys.exit(USAGE)
         # This guy will be the client. The server's address is hard coded
         
-        # Create a echoProtocolClient (factory)
-        echoProtocolClient = EchoClientFactory()
-        tester = ClientTest(client, echoServerAddr)
+        tester = ClientTest(client, echoServerAddr, connectionType)
         
-        # Tell the playground node to run this function when connected to PLAYGROUND
-        client.runWhenConnected(tester.getMessageAndSend)
+        client.runWhenConnected(lambda: stdio.StandardIO(tester))
         
         # Connect to Playground and go
         client.connectToChaperone(chaperoneAddr, chaperonePort)
