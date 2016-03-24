@@ -744,12 +744,14 @@ class BankClientProtocol(playground.network.common.SimpleMessageHandlingProtocol
     def account(self): return self.__account
     
     def connectionMade(self):
+        SimpleMessageHandlingProtocol.connectionMade(self)
         d = self.__deferred.get("CONNECTION", None)
         if d:
             del self.__deferred["CONNECTION"]
             d.callback(True)
         
     def connectionLost(self, reason):
+        SimpleMessageHandlingProtocol.connectionLost(self, reason)
         d = self.__deferred.get("CONNECTION", None)
         if d:
             del self.__deferred["CONNECTION"]
