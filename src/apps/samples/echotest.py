@@ -161,6 +161,7 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
         return self.__connectD
     
     def connectionLost(self, reason=None):
+        SimpleMessageHandlingProtocol.connectionLost(self, reason)
         if self.__closeD:
             d = self.__closeD
             self.__closeD = None
@@ -168,6 +169,7 @@ class EchoClientProtocol(SimpleMessageHandlingProtocol):
             d.callback(reason)
         
     def connectionMade(self):
+        SimpleMessageHandlingProtocol.connectionMade(self)
         self.__connected = True
         for m in self.__backlog:
             self.__sendMessageActual(m)
