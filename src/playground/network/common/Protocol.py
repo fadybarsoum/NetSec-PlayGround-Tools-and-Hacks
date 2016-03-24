@@ -23,7 +23,9 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
     Twisted Protocols but providing for "message Received" as opposed
     to "dataReceived."
     '''
-
+    PRECONNECTION_STATE = 0
+    CONNECTED_STATE = 1
+    CONNECTION_CLOSED_STATE = 2
 
     def __init__(self, factory=None, addr=None):
         '''
@@ -32,6 +34,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         # There is no "TwistedProtocol.__init__"
         self._factory = factory
         self._addr = addr
+        self._connectionState = self.PRECONNECTION_STATE
         if isinstance(factory, TwistedFactory):
             self.__dataHandlingMode = "internet"
             self.__packetStorage = PacketStorage()
@@ -49,6 +52,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                                               stackHack=stackHack+1)
         
     def connectionMade(self):
+        self._connectionState = self.CONNECTED_STATE
         if self._factory and isinstance(self._factory, MIBAddressMixin) and self._factory.MIBAddressEnabled():
             self.configureMIBAddress(str(id(self)), self._factory, self._factory.MIBRegistrar())
             
@@ -57,6 +61,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         self.transport=None
         self._factory = None
         self.disableMIBAddress()
+        self._connectionState = self.CONNECTION_CLOSED_STATE
         
     def changeTimerClass(self, timerClass=None, getTime=None):
         if timerClass:
@@ -97,6 +102,10 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                 messageBuilder = None
                 self.__streamIterator = None
                 self.reportError("Could not get messageBuilder")
+                # we need to not keep trying with the current buffer
+                # advance packetStorage at least one byte.
+                if self.__packetStorage and self.__packetStorage[0]:
+                    self.__packetStorage[0] = self.__packetStorage[0][1:]
                 continue
             except Exception, e:
                 logger.error("Deserialization error in protocol")
