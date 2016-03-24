@@ -4,6 +4,7 @@ Created on Apr 2, 2014
 @author: sethjn
 '''
 import playground
+from playground.config import LoadOptions
 from playground.crypto import X509Certificate
 from playground.network.common import Packet, MIBAddressMixin
 from playground.network.message import definitions
@@ -507,21 +508,27 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         return key, iv
 
 USAGE = """
-mobilecodeserver.Server <accountName> <bank cert> <playground addr> <playground IP server> <playground IP server port>
+mobilecodeserver.Server <playground addr> <chaperone IP> <config file>
 """
 
 if __name__ == "__main__":
-    if len(sys.argv) != 6:
+    if len(sys.argv) != 4:
         sys.exit(USAGE)
-    accountName, cert, addr, ipAddr, ipPort = sys.argv[1:6]
+    addr, ipAddr, configFilename = sys.argv[1:4]
+    if not os.path.exists(configFilename):
+        sys.exit("No such config file %s" % configFilename)
+    configOptions = LoadOptions(configFilename)
+    bankOptions = configOptions.getSection("mobilecodeserver.bankdata")
+    cert = bankOptions["bank_cert_path"]
+    accountName = bankOptions["account_name"]
+    ipPort = 9090
     playgroundAddress = playground.network.common.PlaygroundAddress.FromString(addr)
     
     logctx = LoggingContext()
     logctx.nodeId = "mobile_code_server_"+addr
-    logctx.doPacketTracing = True
+    #logctx.doPacketTracing = True
     playground.playgroundlog.startLogging(logctx)
     
-    ipPort = int(ipPort)
     if not os.path.exists(cert):
         sys.exit("Could not locate cert file " + cert)
     with open(cert) as f:
@@ -529,7 +536,19 @@ if __name__ == "__main__":
     persistenceFile = "mc_server_data."+playgroundAddress.toString()
     server = Server(accountName, cert, persistenceFile)
     # hard coded... move to config file
-    server.registerMobileCodeService("Parallel TSP", 50)
+    
+    serviceOptions = configOptions.getSection("mobilecodeserver.servicedata")
+    for serviceKey in serviceOptions.keys(topLevelOnly=True):
+        serviceName = serviceOptions[serviceKey]["name"]
+        serviceCharge = serviceOptions[serviceKey]["charge"]
+        serviceCharge = int(serviceCharge)
+        print "Registering %s %d" % (serviceName, serviceCharge)
+        server.registerMobileCodeService(serviceName, serviceCharge)
+    #server.registerMobileCodeService("Parallel TSP", 50)
+    
+    networkOptions = configOptions.getSection("mobilecodeserver.networkdata")
+    connectionType = networkOptions.get("connectionType", "RAW")
     client = playground.network.client.ClientBase(playgroundAddress)
-    client.listen(server, MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT, connectionType="RAW")
+    client.listen(server, MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT, 
+                  connectionType=connectionType)
     client.connectToChaperone(ipAddr, ipPort)
