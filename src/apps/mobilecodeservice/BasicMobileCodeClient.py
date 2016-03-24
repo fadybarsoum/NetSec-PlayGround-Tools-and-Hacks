@@ -36,6 +36,7 @@ from playground.network.message import definitions
 from playground.playgroundlog import packetTrace, logging, protocolLog
 from apps.mobilecodeservice.ServiceMessages import CheckMobileCodeResult
 from playground.network.common.Timer import OneshotTimer
+from playground.network.common.MessageHandler import SimpleMessageHandlingProtocol
 logger = logging.getLogger(__file__)
 
 from playground.config import GlobalPlaygroundConfigData
@@ -69,11 +70,12 @@ class BasicClient(object):
             self.codeHash = None
             self.encryptedResult = None
             
-    def __init__(self, clientbase, server):
+    def __init__(self, clientbase, server, connectionType="RAW"):
         self.sessions = {}
         self.execIdToSession = {}
         self.clientbase = clientbase
         self.server = server
+        self.connectionType = connectionType
         
     def buildProtocol(self, addr):
         return BasicClientProtocol(self, addr)
@@ -104,7 +106,8 @@ class BasicClient(object):
     
     def connect(self, mobileCodeId, maxRate):
         srcport, protocol = self.clientbase.connect(self, self.server,
-                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT)
+                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT,
+                                                    connectionType=self.connectionType)
         pod = self.SessionPod()
         pod.mobileCodeId = mobileCodeId
         pod.maxRate = maxRate
@@ -118,7 +121,8 @@ class BasicClient(object):
         pod = self.sessions[cookie]
         self.execIdToSession[execId] = pod
         srcport, protocol = self.clientbase.connect(self, self.server, 
-                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT)
+                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT,
+                                                    connectionType=self.connectionType)
         pod.execId = execId
         pod.mobileCodeString, pod.maxRuntime = mobileCodeString, maxRuntime
         pod.d = defer.Deferred()
@@ -157,7 +161,8 @@ class BasicClient(object):
             # end callback loop. We already have a result!
             return
         srcport, protocol = self.clientbase.connect(self, self.server, 
-                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT)
+                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT,
+                                                    connectionType=self.connectionType)
         protocol.getResult(state)
         #OneshotTimer(lambda: self.__checkResult(state)).run(10)
         
@@ -186,7 +191,8 @@ class BasicClient(object):
         d = defer.Deferred()
         state.d = d
         srcport, protocol = self.clientbase.connect(self, self.server, 
-                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT)
+                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT,
+                                                    connectionType=self.connectionType)
         protocol.sendProofOfPayment(state, receipt, receiptSignature)
         return state.d
     
@@ -206,7 +212,8 @@ class BasicClient(object):
         
     def rerequestKey(self, cookie):
         srcport, protocol = self.clientbase.connect(self, self.server, 
-                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT)
+                                                    MOBILE_CODE_SERVICE_FIXED_PLAYGROUND_PORT,
+                                                    connectionType=self.connectionType)
         fakeState = BasicClient.SessionPod()
         fakeState.cookie = cookie
         fakeState.state = BasicClient.STATE_FINISHED
@@ -215,13 +222,25 @@ class BasicClient(object):
         return fakeState.d
         
 
+def ConnectedAPI(method):
+    def checkConnectionThenCall(self, *args, **kargs):
+        if self._connectionState == SimpleMessageHandlingProtocol.PRECONNECTION_STATE:
+            self.runWhenConnected.append(lambda: method(self, *args, **kargs))
+        elif self._connectionState == SimpleMessageHandlingProtocol.CONNECTION_CLOSED_STATE:
+            raise Exception("Cannot call %s as the connection has closed" % method.__name__)
+        elif self._connectionState == SimpleMessageHandlingProtocol.CONNECTED_STATE:
+            method(self, *args, **kargs)
+        else:
+            raise Exception("Unknown connection state")
+    return checkConnectionThenCall
+
 class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtocol, playground.network.common.StackingProtocolMixin):
-    
     
     def __init__(self, factory, addr):
         playground.network.common.SimpleMessageHandlingProtocol.__init__(self, factory, addr)
         self.__factory = factory
         self.__state = None
+        self.runWhenConnected = []
         self.registerMessageHandler(SessionOpen, self.__handleSessionOpen)
         self.registerMessageHandler(SessionOpenFailure, self.__handleSessionOpenFailure)
         self.registerMessageHandler(EncryptedMobileCodeResult, self.__handleEncryptedResult)
@@ -253,7 +272,17 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
                 self.__state.d = None
                 d.errback(Exception(msg))
         
-    #def connectionMade(self):
+    def connectionMade(self):
+        SimpleMessageHandlingProtocol.connectionMade(self)
+        self.__connected = True
+        for op in self.runWhenConnected:
+            op()
+        self.runWhenConnected = []
+        
+    def connectionLost(self, reason=None):
+        SimpleMessageHandlingProtocol.connectionLost(self, reason)
+        logger.info("Connection lost. Reason: %s" % reason)
+        self.__factory = None
         
     """def connectionLost(self, reason=None):
         playground.network.common.SimpleMessageHandlingProtocol.connectionLost(self, reason)
@@ -261,7 +290,8 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         #self.__error("Connection Lost: " + str(reason))
         if self.__mode != self.STATE_ERROR:
             self.__mode = self.STATE_FINISHED"""
-            
+    
+    @ConnectedAPI      
     def connect(self, state, timeout=None):
         request = MessageData.GetMessageBuilder(OpenSession)
         self.__state = state
@@ -295,7 +325,8 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         self.__state.cookie = msgObj.Cookie
         self.__factory.protocolSignalsSessionOpen(self.__state)
         self.transport.loseConnection()
-        
+    
+    @ConnectedAPI    
     def runMobileCode(self, state, timeout=None):
         self.__state = state
         logger.info("Starting runMobileCode with state %s, cookie %s, ID %s" % (state.state, state.cookie, state.execId))
@@ -401,7 +432,8 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
                 logger.info("ACK message: %s" % msgObj.Message)
             self.__factory.protocolSignalsMobileCodeAccepted(self.__state)
         self.transport.loseConnection()
-        
+    
+    @ConnectedAPI       
     def getResult(self, state, timeout=None):
         if state.state != BasicClient.STATE_RUNNING:
             raise Exception("Cannot call 'getResult' unless in running state")
@@ -469,7 +501,8 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         packetTrace(logger, request, "Sending purchase information. Cookie = %d/%d" % (self.__connData["ClientNonce"],
                                                                                       self.__connData["ServerNonce"]))
         self.transport.writeMessage(request)"""
-        
+    
+    @ConnectedAPI       
     def sendProofOfPayment(self, state, receipt, receiptSignature):
         if state.state != BasicClient.STATE_PURCHASE:
             self.__error("Not in correct mode to send proof of payment. Got %s, cookie %s" % 
@@ -504,7 +537,8 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         self.__mode = self.STATE_FINISHED
         protocolLog(self, logger.info, "Call lose connection on %s" % str(self.transport))
         self.transport.loseConnection()"""
-        
+    
+    @ConnectedAPI       
     def rerequestKey(self, state):
         if state.state != BasicClient.STATE_FINISHED:
             raise Exception("Can only rerequest key in a finished state. Got " + state.state)
@@ -601,7 +635,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
     MIB_BLACK_LIST_FAMILIES = "BlackListFamilies"
     MIB_RECENT_HISTORY = "RecentHistory"
     
-    def __init__(self, playground, myAccount, bankFactory, bankAddr):
+    def __init__(self, playground, myAccount, bankFactory, bankAddr, **options):
         self.__playground = playground
         self.__myAccount = myAccount
         self.__bankFactory = bankFactory
@@ -615,6 +649,8 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         self.__recentHistory = []
         self.__bankAddr = bankAddr
         self.__connectionFailures = {}
+        self.__mcServerConnectionType = options.get("mcConnType","RAW")
+        self.__bankConnectionType = options.get("bankConnType", "RAW")
         #self.__parallelControl = parallelControl
         
     def getBlacklist(self):
@@ -712,7 +748,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             # client = self.__openClients[peer]
             pass
         else:
-            self.__openClients[peer] = BasicClient(self.__playground, peer)
+            self.__openClients[peer] = BasicClient(self.__playground, peer, self.__mcServerConnectionType)
         codeId = self.__parallelControl.mobileCodeId()
         maxRate = self.__parallelControl.maxRate()
         
@@ -786,7 +822,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         srcPort, bankProtocol = self.__playground.connect(self.__bankFactory,
                                                               self.__bankAddr, 
                                                               BANK_FIXED_PLAYGROUND_PORT,
-                                                              connectionType="RAW")
+                                                              connectionType=self.__bankConnectionType)
         bankCmd = BankClientSimpleCommand()
         return bankCmd(bankProtocol, self.__myAccount, BankClientProtocol.getBalance)
         
@@ -976,7 +1012,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         srcPort, bankProtocolStack = self.__playground.connect(self.__bankFactory,
                                                               self.__bankAddr, 
                                                               BANK_FIXED_PLAYGROUND_PORT,
-                                                              connectionType="RAW")
+                                                              connectionType=self.__bankConnectionType)
         bankProtocol = bankProtocolStack
         logger.info("Logging into bank for %s transfer for work done by %s" % (str(memo), str(addr)))
         d = bankProtocol.waitForConnection()
