@@ -150,7 +150,7 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
     def getCodeString(self, startPath, endPath):
         return TSPCodeTemplate % (self.__citiesStr, startPath, endPath)
     
-    def __init__(self, n=40, pathsPerParallel=None):
+    def __init__(self, n=40, pathsPerParallel=None, maxRate=20):
 
         self.__matrix = generateDistanceMatrix(n)
         self.__parallelCodes = {}
@@ -170,6 +170,7 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
         self.__idsToPaths = {}
         self.__completedPaths = 0
         self.__addrData = {}
+        self.__maxRate = maxRate
         
     def configureMIBAddress(self, *args, **kargs):
         MIBAddressMixin.configureMIBAddress(self, *args, **kargs)
@@ -227,7 +228,7 @@ class ParallelTSP(CLIShell, MIBAddressMixin):
         return "Parallel TSP"
     
     def maxRate(self):
-        return 100
+        return self.__maxRate
     
     def maxRuntime(self):
         return 1*60*60
@@ -553,7 +554,9 @@ def main():
     #logctx.doPacketTracing = True
     playground.playgroundlog.startLogging(logctx)
     
-    parallelMaster = BasicMobileCodeFactory(client, bankOptions["account"], bankFactory, bankAddr)
+    parallelMaster = BasicMobileCodeFactory(client, bankOptions["account"], bankFactory, bankAddr,
+                                            mcConnType=configOptions.get("ptsp.networkdata.connectionType","RAW"),
+                                            bankConnType=bankOptions.get("connectionType","RAW"))
     
     #client.runWhenConnected(lambda: ptsp.configureMIBAddress("ParallelTSP", client, client.MIBRegistrar()))
     #client.runWhenConnected(lambda: )
