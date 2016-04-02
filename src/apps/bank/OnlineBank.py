@@ -38,6 +38,26 @@ PasswordHash = lambda pw: SHA.new(pw).digest()
 
 BANK_FIXED_PLAYGROUND_PORT = 700
 
+class SafeFileStream(object):
+    def __init__(self, filename):
+        self.__filename = filename
+    def write(self, msg):
+        mode = "a"
+        if not os.path.exists(self.__filename):
+            mode = "w+"
+        with open(self.__filename,mode) as f:
+            f.write(msg)
+        return len(msg)
+    def flush(self):
+        return
+def enableSecurityLogging(bankpath):
+    logpath = os.path.join(bankpath, "securitylog."+str(time.time())+".log")
+    loghandler = logging.StreamHandler(SafeFileStream(logpath))
+    logging.getLogger('').addHandler(loghandler)
+    loghandler.setLevel("CRITICAL")
+def logSecure(msg):
+    logging.critical(msg)
+
 """
 Protocol
 [c] -> [ob (server)] :: C sends openSession(login_name, password)
@@ -60,6 +80,19 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
     
     ADMIN_PW_ACCOUNT = "__admin__"
     ADMIN_ACCOUNTS = ["VAULT"]
+    
+    WITHDRAWAL_LIMIT = 1000
+    WITHDRAWAL_WINDOW = 6*3600 # 6 hours in seconds
+    
+    def __logSecure(self, msg):
+        fullMsg = "SERVER SECURITY (Session %(ClientNonce)d-%(ServerNonce)d"
+        fullMsg += " User [%(LoginName)s] Account [%(AccountName)s] "
+        fullMsg = fullMsg % self.__connData
+        peer = self.transport and self.transport.getPeer() or "<NOT CONNECTED>"
+        fullMsg += " Peer [%s]): " % peer
+        fullMsg += msg
+        logSecure(fullMsg)
+    
     def __init__(self, factory, addr, pwDb, bank):
         playground.network.common.SimpleMessageHandlingProtocol.__init__(self, factory, addr)
         self.setLocalErrorHandler(self)
@@ -70,6 +103,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
                            "LoginName":None}
         self.__state = self.STATE_UNINIT
         self.__bank = bank
+        self.__withdrawlTracking = {}
         self.registerMessageHandler(OpenSession, self.__handleOpenSession)
         self.registerMessageHandler(ListAccounts, self.__handleListAccounts)
         self.registerMessageHandler(ListUsers, self.__handleListUsers)
@@ -87,6 +121,14 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         self.registerMessageHandler(LedgerRequest, self.__handleLedgerRequest)
         self.registerMessageHandler(Close, self.__handleClose)
         
+    def messageReceived(self, msg):
+        self.__logSecure("Received message %s" % msg)
+        playground.network.common.SimpleMessageHandlingProtocol.messageReceived(self, msg)
+        
+    def __clearWithdrawlLimit(self, account):
+        if self.__withdrawlTracking.has_key(account):
+            del self.__withdrawlTracking[account]
+        
     def __loadMibs(self):
         if self.MIBAddressEnabled():
             self.registerLocalMIB(self.MIB_CURRENT_STATE, self.__handleMib)
@@ -101,6 +143,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         return []
     
     def handleError(self, message, reporter=None, stackHack=0):
+        self.__logSecure("Error Reported %s" % message )
         # handleError handles error messages reported in the framework
         # this is different from __error, which is designed to handle
         # errors in the protocol
@@ -131,6 +174,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             pass
     
     def __error(self, errMsg, requestId = 0, fatal=True):
+        self.__logSecure(errMsg)
         if self.__state == self.STATE_ERROR:
             return None
         if self.__state == self.STATE_UNINIT:
@@ -151,6 +195,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
     def __sendPermissionDenied(self, errMsg, requestId=0):
         if self.__state == self.STATE_ERROR:
             return None
+        self.__logSecure("Permission denied, %s" % errMsg)
         response = MessageData.GetMessageBuilder(PermissionDenied)
         response["ClientNonce"].setData(self.__connData.get("ClientNonce",0))
         response["ServerNonce"].setData(self.__connData.get("ServerNonce",0))
@@ -179,6 +224,8 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
     def __validateAdminPeerConnection(self):
         peer = self.transport.getPeer()
         if not peer: return False
+        addr = peer.host
+        if addr[0] != 0: return False
         return True
     
     def __getAdminPermissions(self, requestId=0, fatal=True):
@@ -233,6 +280,8 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response["ClientNonce"].setData(msgObj.ClientNonce)
         response["ServerNonce"].setData(self.__connData["ServerNonce"])
         response["Account"].setData("")
+        self.__logSecure("Request for open with nonce %d, sending back %d" % (msgObj.ClientNonce,
+                                                                              self.__connData["ServerNonce"]))
         self.transport.writeMessage(response)
         
     def __handleCurrentAccount(self, protocol, msg):
@@ -258,6 +307,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
                 # error already reported.
                 return None
             if "B" not in adminAccessData:
+                self.__logSecure("Trying to list accounts for %s requires 'B' access, but has %s" % (msgObj.User, adminAccessData))
                 return self.__sendPermissionDenied("Requires 'B' access", msgObj.RequestId)
             userName = msgObj.User
         else:
@@ -281,9 +331,11 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             accountToList = account
         else:
             accountToList = msgObj.Account
+        self.__logSecure("list users requested for account %s" % accountToList)
             
         if accountToList == '':
             adminAccessData = self.__getAdminPermissions(msgObj.RequestId)
+            self.__logSecure("List of all users required admin access")
             if adminAccessData == None:
                 # error already reported
                 return None
@@ -291,6 +343,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         else:
             accountToListAccess = self.__pwDb.currentAccess(self.__connData["LoginName"], accountToList)
             if 'a' not in accountToListAccess:
+                self.__logSecure("List of users for account %s required 'a', but access is %s" % (accountToList, accountToListAccess))
                 return self.__sendPermissionDenied("Requires 'a' access", msgObj.RequestId)
 
         for name in self.__pwDb.iterateUsers(accountToList):
@@ -298,6 +351,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response = self.__createResponse(msgObj, ListUsersResponse)
         response["RequestId"].setData(msgObj.RequestId)
         response["Users"].setData(users)
+        self.__logSecure("sending list of %d users" % len(users))
         self.transport.writeMessage(response)    
         
     def __handleSwitchAccount(self, protocol, msg):
@@ -310,18 +364,24 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         
         result = True
         if desiredAccount.startswith("__"):
+            self.__logSecure("ATTEMPT TO ACCESS SPECIAL ACCOUNT %s" % desiredAccount)
             result = False
         elif desiredAccount in self.ADMIN_ACCOUNTS:
             adminAccess = self.__getAdminPermissions(msgObj.RequestId)
             if adminAccess == None:
+                self.__logSecure("ATTEMPT TO ACCESS ADMIN ACCOUNT %s" % desiredAccount)
                 return
             if 'S' not in adminAccess:
+                self.__logSecure("ATTEMPT TO ACCESS ADMIN ACCOUNT %s WITHOUT 'S' in %s" % (desiredAccount, adminAccess))
                 return self.__sendPermissionDenied("Requires 'S' permissions", msgObj.RequestId)
         elif desiredAccount:
             access = self.__pwDb.currentAccess(self.__connData["LoginName"], desiredAccount)
-            if not access: result = False
+            if not access:
+                self.__logSecure("Attempt to switch to %s, but no access" % desiredAccount) 
+                result = False
         if result:
             self.__connData["AccountName"] = desiredAccount
+            self.__logSecure("Account Switched")
         if result:
             response = self.__createResponse(msgObj, RequestSucceeded)
         else:
@@ -335,18 +395,21 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         account, access = self.__getSessionAccount(msgObj)
         if not account:
+            self.__logSecure("Cannot get balance when no account selected")
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData("Account must be selected")
             self.transport.writeMessage(response)
             return None
         if 'b' not in access:
+            self.__logSecure("Required 'b' access for account %s, but had %s" % (account, access))
             return self.__sendPermissionDenied("No Permission to check Balances", 
                                                msgObj.RequestId)
         balance = self.__bank.getBalance(account)
         response = self.__createResponse(msgObj, BalanceResponse)
         response["RequestId"].setData(msgObj.RequestId)
         response["Balance"].setData(balance)
+        self.__logSecure("Sending back balance")
         self.transport.writeMessage(response)
         
     def __handleAdminBalanceRequest(self, protocol, msg):
@@ -354,8 +417,10 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         adminAccess = self.__getAdminPermissions(msgObj.RequestId)
         if adminAccess == None:
+            self.__logSecure("No admin access to get admin balances")
             return
         if "B" not in adminAccess:
+            self.__logSecure("Requires 'B' access for balances, but have %s" % adminAccess)
             return self.__sendPermissionDenied("Requires 'B' access", msgObj.RequestId)
         accountList = self.__bank.getAccounts()
         balancesList = []
@@ -365,6 +430,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response["RequestId"].setData(msgObj.RequestId)
         response["Accounts"].setData(accountList)
         response["Balances"].setData(balancesList)
+        self.__logSecure("Sending back %d balances" % len(balancesList))
         self.transport.writeMessage(response)
         
     def __handleTransferRequest(self, protocol, msg):
@@ -372,11 +438,13 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         account, access = self.__getSessionAccount(msgObj)
         if not account:
+            self.__logSecure("Cannot get transfer when no account selected")
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData("Account must be selected")
             self.transport.writeMessage(response)
         if not 't' in access:
+            self.__logSecure("Requires 't' access to transfer from %s, but have %s" % (account, access))
             return self.__sendPermissionDenied("Requires 't' access", msgObj.RequestId)
         dstAccount = msgObj.DstAccount
         if not dstAccount in self.__bank.getAccounts():
@@ -403,6 +471,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response["RequestId"].setData(msgObj.RequestId)
         response["Receipt"].setData(receipt)
         response["ReceiptSignature"].setData(signature)
+        self.__logSecure("Transfer succeeded, sending receipt")
         self.transport.writeMessage(response)
         
     def __handleDeposit(self, protocol, msg):
@@ -410,11 +479,13 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         account, access = self.__getSessionAccount(msgObj)
         if not account:
+            self.__logSecure("Cannot get deposit when no account selected")
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData("Account must be selected")
             self.transport.writeMessage(response)
         if 'd' not in access:
+            self.__logSecure("Requires 'd' access to deposit in %s, but have %s" % (account, access))
             return self.__sendPermissionDenied("Requires 'd' access", msgObj.RequestId)
         bps = []
         bpData = msgObj.bpData
@@ -424,16 +495,19 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             bps.append(newBitPoint)
         result = self.__bank.depositCash(account,bps)
         if not result.succeeded():
+            self.__logSecure("Deposit failed, %s" % result.msg())
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData(result.msg())
         else:
             result = self.__bank.generateReceipt(account)
             if not result.succeeded():
+                self.__logSecure("Could not generate receipt? %s" % result.msg())
                 response = self.__createResponse(msgObj, RequestFailure)
                 response["RequestId"].setData(msgObj.RequestId)
                 response["ErrorMessage"].setData(result.msg())
             else:
+                self.__logSecure("Deposit complete. Sending Signed Receipt")
                 receipt, signature = result.value()
                 response = self.__createResponse(msgObj, Receipt)
                 response["RequestId"].setData(msgObj.RequestId)
@@ -446,18 +520,32 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         account, access = self.__getSessionAccount(msgObj)
         if not account:
+            self.__logSecure("Cannot withdraw when no account selected")
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData("Account must be selected")
             self.transport.writeMessage(response)
         if 'd' not in access:
+            self.__logSecure("Requires 'd' access to withdraw from %s but have %s" % (account, access))
             return self.__sendPermissionDenied("Requires 'd' access", msgObj.RequestId)
+        if self.__withdrawlTracking.get(account,0)+msgObj.Amount > self.WITHDRAWAL_LIMIT:
+            self.__logSecure("Attempt to withdraw over the limit. Current: %d, requested: %d, limit: %d" % 
+                             (self.__withdrawlTracking.get(account, 0), msgObj.Amount, self.WITHDRAWAL_LIMIT))
+            response = self.__createResponse(msgObj, RequestFailure)
+            response["RequestId"].setData(msgObj.RequestId)
+            response["ErrorMessage"].setData("Over Limit")
+            self.transport.writeMessage(response)
+            return
         result = self.__bank.withdrawCash(account,msgObj.Amount)
         if not result.succeeded():
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData(result.msg())
         else:
+            if not self.__withdrawlTracking.has_key(account):
+                self.__withdrawlTracking[account] = 0
+                self.callLater(self.WITHDRAWAL_WINDOW, lambda: self.__clearWithdrawlLimit(account))
+            self.__withdrawlTracking[account] += msgObj.Amount
             bitPoints = result.value()
             bpData = ""
             for bitPoint in bitPoints:
@@ -478,7 +566,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         userName = msgObj.loginName
         newUser = msgObj.NewUser
-        logger.info("Received change password request. Current user %s, user to change [%s]" % 
+        self.__logSecure("Received change password request. Current user %s, user to change [%s]" % 
                     (self.__connData["LoginName"], userName))
         errorResponse = self.__createResponse(msgObj, RequestFailure)
         errorResponse["RequestId"].setData(msgObj.RequestId)
@@ -491,28 +579,35 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             # if this is a new user, must be admin because couldn't login
             adminAccess = self.__getAdminPermissions(msgObj.RequestId)
             if adminAccess == None:
+                self.__logSecure("Failed. Admin access required to create user, or change other user")
                 return
             if "A" not in adminAccess:
+                self.__logSecure("Failed. Requires 'A' access, but only have %s" % adminAccess)
                 return self.__sendPermissionDenied("Requires 'A' access", msgObj.RequestId)
             
             if newUser and self.__pwDb.hasUser(userName):
+                self.__logSecure("Tried to create user %s that already exists" % userName)
                 errorResponse["ErrorMessage"].setData("User %s already exists" % userName)
                 self.transport.writeMessage(errorResponse)
                 return
             elif newUser and not self.__isValidUsername(userName):
+                self.__logSecure("Attempt to create user with invalid name [%s]" % userName)
                 errorResponse["ErrorMessage"].setData("Username invalid. Only letters, numbers, and underscores.")
                 self.transport.writeMessage(errorResponse)
                 return
             elif not newUser and not self.__pwDb.hasUser(userName):
+                self.__logSecure("Attempt to change password for non-existent user [%s]" % userName)
                 errorResponse["ErrorMessage"].setData("User %s does not exist" % userName)
                 self.transport.writeMessage(errorResponse)
                 return
         elif msgObj.oldPwHash == '':
             # Cannot allow this.
+            self.__logSecure("Attempt to change username %s without previous hash" % userName)
             errorResponse["ErrorMessage"].setData("No password hash specified")
             self.transport.writeMessage(errorResponse)
             return
         elif self.__pwDb.currentUserPassword(userName) != msgObj.oldPwHash:
+                self.__logSecure("Incorrect previous password for %s password change" % userName)
                 errorResponse["ErrorMessage"].setData("Invalid Password")
                 self.transport.writeMessage(errorResponse)
                 return
@@ -520,6 +615,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         pwHash = msgObj.newPwHash
         self.__pwDb.createUser(userName, pwHash, modify=True)
         self.__pwDb.sync()
+        self.__logSecure("Password changed")
         self.transport.writeMessage(okResponse)
         
     def __handleCreateAccount(self, protocol, msg):
@@ -527,20 +623,25 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         msgObj = msg.data()
         adminAccess = self.__getAdminPermissions(msgObj.RequestId)
         if adminAccess == None:
+            self.__logSecure("Creating an account requires administrator access")
             return
         if "A" not in adminAccess:
+            self.__logSecure("Creating an account requires 'A' access. Only have %s" % adminAccess)
             return self.__sendPermissionDenied("Requires 'A' access", msgObj.RequestId)
         
         response = self.__createResponse(msgObj, RequestSucceeded)
         newAccountName = msgObj.AccountName
         if self.__pwDb.hasAccount(newAccountName):
+            self.__logSecure("Attempt to create account that already exists")
             response = self.__createResponse(msgObj, RequestFailure)
             response["ErrorMessage"].setData("That account already exists")
         result = self.__bank.createAccount(newAccountName)
         if result.succeeded():
+            self.__logSecure("New account %s created" % newAccountName)
             self.__pwDb.createAccount(newAccountName)
             self.__pwDb.sync()
         else:
+            self.__logSecure("Internal Failure in creating account %s" % newAccountName)
             response = self.__createResponse(msgObj, RequestFailure)
             response["ErrorMessage"].setData("Could not create account. Internal error")
         response["RequestId"].setData(msgObj.RequestId)
@@ -556,19 +657,23 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         if hasattr(msgObj, "AccountName"):
             accountName = msgObj.AccountName
         else: accountName = None
+        self.__logSecure("Attempt to check access of %s on account %s" % (checkUserName, accountName))
         
         if userName != checkUserName and not accountName:
             # requires admin access to get general permissions for other user
             adminAccess = self.__getAdminPermissions(msgObj.RequestId)
             if adminAccess == None:
+                self.__logSecure("Checking this access requires administrative access")
                 return
             if 'A' not in adminAccess:
+                self.__logSecure("Checking this access requires 'A' access, but have %s" % adminAccess)
                 return self.__sendPermissionDenied("Requires admin access 'A'", 
                                                    msgObj.RequestId)
         elif userName != checkUserName:
             # requires 'a' to check other user's permissions on an account
             access = self.__pwDb.currentAccess(userName, accountName) 
             if 'a' not in access:
+                self.__logSecure("Checking this access requires 'a' access but have %s" % access)
                 return self.__sendPermissionDenied("Requires access 'a'", 
                                                    msgObj.RequestId)
         
@@ -586,6 +691,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response["RequestId"].setData(msgObj.RequestId)
         response["Accounts"].setData(accounts)
         response["Access"].setData(accountsAccess)
+        self.__logSecure("Sending back access information for %s on %d accounts" % (checkUserName, len(accountsAccess)))
         self.transport.writeMessage(response)
         
     def __handleChangeAccess(self, protocol, msg):
@@ -597,8 +703,10 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         changeUserName = msgObj.UserName
         account, access = self.__getSessionAccount(msgObj)
         if account == None:
+            self.__logSecure("Cannot change access. There was an error in state")
             return None # this was an actual error
         if not account and not hasattr(msgObj, "Account"):
+            self.__logSecure("Cannot change access, no account specified, and no current account selected")
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData("Account must be selected or specified")
@@ -606,32 +714,38 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
             return
         if hasattr(msgObj, "Account"):
             account = msgObj.Account
+            self.__logSecure("Trying to change access for %s in account %s" % (userName, account))
             access = self.__pwDb.currentAccess(userName, account)
         if not access:
             # doesn't own the account. Check admin 
             # 
             adminAccess = self.__getAdminPermissions(msgObj.RequestId)
             if adminAccess == None:
+                self.__logSecure("Access change request requires an administrator")
                 return
             if 'A' not in adminAccess:
+                self.__logSecure("Access change request requires 'A' access, but have %s" % adminAccess)
                 return self.__sendPermissionDenied("Requires admin access or regular 'a'", 
                                                    msgObj.RequestId)
         elif 'a' not in access:
             # do a non-fatal admin access check
             adminAccess = self.__getAdminPermissions(msgObj.RequestId, fatal=False)
             if not adminAccess or 'A' not in adminAccess:
+                self.__logSecure("Access change request requires 'a' or 'A' but got %s and %s" % (access, adminAccess))
                 return self.__sendPermissionDenied("Requires 'a' access or admin", msgObj.RequestId)
         
         if not self.__pwDb.isValidAccessSpec(msgObj.AccessString, account):
             response = self.__createResponse(msgObj, RequestFailure)
             response["RequestId"].setData(msgObj.RequestId)
             response["ErrorMessage"].setData("Invalid access string %s" % msgObj.AccessString)
+            self.__logSecure("Tried to change access to invalid %s" % msgObj.AccessString)
             self.transport.writeMessage(response)
             return
         self.__pwDb.configureAccess(changeUserName, account, msgObj.AccessString)
         self.__pwDb.sync()
         response = self.__createResponse(msgObj, RequestSucceeded)
         response["RequestId"].setData(msgObj.RequestId)
+        self.__logSecure("User %s access to %s changed to %s" % (changeUserName, account, msgObj.AccessString))
         self.transport.writeMessage(response)
 
     def __handleLedgerRequest(self, protocol, msg):
@@ -639,13 +753,16 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         #account, access = self.__getSessionAccount(msgObj)
         userName = self.__connData["LoginName"]
         accountToGet = hasattr(msgObj,"Account") and msgObj.Account or None
+        self.__logSecure("Request ledger for user %s and account %s" % (userName, accountToGet))
         if not accountToGet:
             # No account specified. Get the entire bank ledger.
             # this is administrative access only.
             adminAccess = self.__getAdminPermissions(msgObj.RequestId)
             if adminAccess == None:
+                self.__logSecure("Requesting an all-accounts ledger requires admin access")
                 return
             if 'A' not in adminAccess:
+                self.__logSecure("Requesting an all-accounts ledger requires 'A' access, but have %s" % adminAccess)
                 return self.__sendPermissionDenied("Requires admin access", 
                                                    msgObj.RequestId)
             # return all lines
@@ -656,6 +773,8 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
                 # don't kill the connection if we don't have admin. Just tell them.
                 adminAccess = self.__getAdminPermissions(msgObj.RequestId, fatal=False)
                 if adminAccess == None or 'A' not in adminAccess:
+                    self.__logSecure("User %s attempting to get ledger for %s requires 'a' or 'A', but have %s and %s" %
+                                     (userName, accountToGet, accountToGetAccess, adminAccess))
                     return self.__sendPermissionDenied("Requires admin access or regular 'a'", 
                                                        msgObj.RequestId)
             lFilter = lambda lline: lline.partOfTransaction(accountToGet)
@@ -667,10 +786,12 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         response = self.__createResponse(msgObj, LedgerResponse)
         response["RequestId"].setData(msgObj.RequestId)
         response["Lines"].setData(lines)
+        self.__logSecure("User %s getting ledger for %s (%d lines" % (userName, accountToGet, len(lines)))
         self.transport.writeMessage(response)
             
     def __handleClose(self, protocol, msg):
         msgObj = msg.data()
+        self.__logSecure("Close Connection")
         if self.__state != self.STATE_OPEN:
             return # silently ignore close messages on unopen connections
         if self.__connData["ClientNonce"] != msgObj.ClientNonce:
@@ -1593,6 +1714,8 @@ class PlaygroundNodeControl(object):
         with open(certPath) as f:
             cert = X509Certificate.loadPEM(f.read())
         ledgerPassword = getpass.getpass("Enter bank password:")
+        enableSecurityLogging(bankPath)
+        logSecure("Security Logging Enabled, creating bank server from path %s" % bankPath)
         bank = Ledger(bankPath, cert, ledgerPassword)
         self.bankServer = PlaygroundOnlineBank(passwordFile, bank)
         self.clientBase.listen(self.bankServer, 
