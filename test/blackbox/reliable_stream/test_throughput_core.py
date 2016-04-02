@@ -88,7 +88,7 @@ class ThroughputTestControl(object):
             data, = txArgs
         elif txType == self.TX_TYPE_RANDOM:
             count, = txArgs
-            data = random._urandom(count)
+            data = "".join([chr(random.getrandbits(8)) for _ in xrange(count)])#random._urandom(count)
         else:
             raise Exception("Unknown transmission type %s" % txType)
         self.protocol.send(data, txId)

@@ -13,7 +13,7 @@ class ThroughputTestPeer(framework.TestPeer):
     def _realStart(self, transmissions, **parameters):
         sys.path.insert(0, self.playgroundPath)
         import playground
-        print "Starting test for", playground
+        print "Starting test for", self.playgroundPath, playground
         import test_throughput_core as core
         from playground import playgroundlog
         #playgroundlog.g_Ctx = ForcePacketTrace()
@@ -62,8 +62,40 @@ class NetSecSpring2016_ReliableTest(object):
     SERVER_ADDRESS = "20161.0.1000.1"
     CLIENT_ADDRESS = "20161.0.1000.2"
     SERVER_PORT = 1000
+    
+    class Result(object):
+        def __init__(self):
+            self.client = ""
+            self.server = ""
+            self.clientPassCount = 0
+            self.clientFailCount = 0
+            self.serverPassCount = 0
+            self.serverFailCount = 0
+            self.bytesRouted = 0
+            self.bytesDamaged = 0
+            self.packSent = 0
+            self.packDamaged = 0
+            self.clientThroughput = 0.0
+            self.serverThroughput = 0.0
+            
+        def toTuple(self):
+            return (self.client, self.server,
+                    self.clientPassCount, self.clientFailCount, 
+                    self.serverPassCount, self.serverFailCount,
+                    self.bytesRouted, self.bytesDamaged, self.packSent, self.packDamaged,
+                    self.clientThroughput, self.serverThroughput)
+    
     def __init__(self):
-        pass
+        self.allResults = []
+        
+    def __storeResult(self, res):
+        self.allResults.append(res.toTuple())
+        
+    def saveResults(self, csvFilename):
+        with open(csvFilename, "a") as f:
+            for resTuple in self.allResults:
+                f.write("%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%f,%f\n" % resTuple)
+            
     
     def _getTransmissionTemplates(self):
         return [
@@ -99,14 +131,20 @@ class NetSecSpring2016_ReliableTest(object):
         
     def runTest(self, clientPlaygroundPath, serverPlaygroundPath, **chaperoneArgs):
         framework.g_Mailbox["RESULTS"] = framework.g_Manager.list()
+        
+        storeResultData = self.Result()
+        storeResultData.client = clientPlaygroundPath
+        storeResultData.server = serverPlaygroundPath
+        
         chaperone = framework.ChaperoneControl()
         chaperone.start(**chaperoneArgs)
         print "waiting for chaperone"
-        result = self.syncWait(chaperone.running, 10)
+        result = self.syncWait(chaperone.running, 30)
         if not result:
             print "Could not start chaperone. Exiting"
             chaperone.stop()
-            return
+            chaperone.join()
+            return self.__storeResult(storeResultData)
         
         client = ThroughputTestPeer("ThroughputClient")
         server = ThroughputTestPeer("ThroughputServer")
@@ -116,25 +154,28 @@ class NetSecSpring2016_ReliableTest(object):
         server.playgroundPath = serverPlaygroundPath
         server.start(self._getTransmissionTemplates())
         print "waiting for server"
-        result = self.syncWait(server.started, 10)
+        result = self.syncWait(server.started, 15)
         if not result:
             print "Could not start server. Exiting"
             chaperone.stop()
             server.stop()
-            return
+            chaperone.join(), server.join()
+            return self.__storeResult(storeResultData)
         
         templates = self._getTransmissionTemplates()
         client.start(templates)
-        result = self.syncWait(client.connected, 20)
+        result = self.syncWait(client.connected, 30)
+        storeResultData.clientFailCount = len(templates)
+        storeResultData.serverFailCount = len(templates)
         if result:
             result = self.syncWait(server.connected, 20)
         if not result:
-            print "Could not connect client and/or server. Exiting"
+            print "Could not connect client and/or server. Full stop on test"
             chaperone.stop()
             server.stop()
             client.stop()
             chaperone.join(), server.join(), client.join()
-            return
+            return self.__storeResult(storeResultData)
         client.join()
         server.join()
         chaperone.stop()
@@ -145,10 +186,19 @@ class NetSecSpring2016_ReliableTest(object):
         if stats:
             for k,v in stats.items():
                 print "\t%s: %s" % (k,v)
+                if k == "packetsRouted": 
+                    storeResultData.packSent = int(v)
+                elif k == "packetsDropped" or k == "packetsCorrupted":
+                    storeResultData.packDamaged += int(v)
+                elif k == "bytesRouted":
+                    storeResultData.bytesRouted = int(v)
+                elif k == "bytesCorrupted":
+                    storeResultData.bytesDamaged += int(v)
         else:
             print "No chaperone stats"
         if not client.finished():
             print "Client did not finish. TestFailed"
+            
         else:
             results = client.results()
             testsPassed = []
@@ -158,10 +208,13 @@ class NetSecSpring2016_ReliableTest(object):
                 if (server.testId(), testNumber, [True]) not in results:
                     testsFailed.append(testNumber)
                 else: testsPassed.append(testNumber)
+            storeResultData.clientPassCount = len(testsPassed)
+            storeResultData.clientFailCount = len(testsFailed)
             print "Client successfully received server-sent tests %s" % testsPassed
             if testsFailed:
                 print "Client did not receive/pass server-sent tests %s" % testsFailed
-            print "Client throughput: ", client.throughput()    
+            print "Client throughput: ", client.throughput()  
+            storeResultData.clientThroughput = client.throughput()
         if not server.finished():
             print "Server did not finish. Test Failed"
         else:
@@ -173,28 +226,75 @@ class NetSecSpring2016_ReliableTest(object):
                 if (client.testId(), testNumber, [True]) not in results:
                     testsFailed.append(testNumber)
                 else: testsPassed.append(testNumber)
+            storeResultData.serverPassCount = len(testsPassed)
+            storeResultData.serverFailCount = len(testsFailed)
             print "Server successfully received server-sent tests %s" % testsPassed
             if testsFailed:
                 print "Server did not receive/pass server-sent tests %s" % testsFailed
-            print "Server throughput: ", server.throughput()  
+            print "Server throughput: ", server.throughput()
+            storeResultData.serverThroughput = server.throughput()
+        return self.__storeResult(storeResultData)
+    
+def multiErrorRateTest(impl1, impl2, resultsFileName):
+    print "Testing %s v %s" % (impl1, impl2)
+    test = NetSecSpring2016_ReliableTest()
+    
+    print "RUN TEST WITHOUT ERRORS"
+    test.runTest(impl1, impl2)
+    
+    for i in [10,20,30,40,50,60,70,80,90]:
+        errorRate = (0,i,1000000)
+        lossRate = (0,int(i/10),1000)
+        print "\n\nRUN TEST WITH ERROR RATE = %s, LOSS = %s" % (errorRate, lossRate)
+        test.runTest(impl1, impl2, errorRate=errorRate, lossRate=lossRate)
+    test.saveResults(resultsFileName)  
     
 class ForcePacketTrace(object):
     def __init__(self):
         self.doPacketTracing=True
 if __name__=="__main__":
-    import logging
-    logging.getLogger("").setLevel("ERROR")
+    import logging, random, os
+    
+    args = sys.argv[1:]
+    entries = None
+    loglevel = "ERROR"
+    while args and args[0][0] == '-':
+        print args[0]
+        flag = args.pop(0)
+        if flag == "-f":
+            bakeOffEntriesFile = args.pop(0)
+            with open(bakeOffEntriesFile) as f:
+                entries = f.readlines()
+        elif flag == "--loglevel":
+            loglevel = args.pop(0)
+            print "loglevel", loglevel
+    resultsFileName = args.pop(0)
+    if not entries:
+        entries = args
+    
+    
+    random.seed(0)
+    logging.getLogger("").setLevel(loglevel)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     stdoutHandler = logging.StreamHandler(sys.stdout)
     stdoutHandler.setFormatter(formatter)
-    logging.getLogger("").addHandler(stdoutHandler)
-    test = NetSecSpring2016_ReliableTest()
+    #logging.getLogger("").addHandler(stdoutHandler)
+    logfile = open("debuglog.log","w+")
+    fileHandler = logging.StreamHandler(logfile)
+    fileHandler.setFormatter(formatter)
+    logging.getLogger("").addHandler(fileHandler)
+    print  entries
+
+    # run every entry against every other entry including itself
+    for entry1 in entries:
+        entry1 = entry1.strip()
+        if not entry1: continue
+        entry1 = os.path.expanduser(entry1)
+        for entry2 in entries:
+            entry2 = entry2.strip()
+            if not entry2: continue
+            entry2 = os.path.expanduser(entry2)
+            multiErrorRateTest(entry1, entry2, resultsFileName)
+    print "BAKE OFF COMPLETE"
+    logfile.close()
     
-    print "RUN TEST WITHOUT ERRORS"
-    test.runTest(sys.argv[1], sys.argv[2])
-    
-    for i in [10,30,50,70,90]:
-        errorRate = (0,i,1000000)
-        lossRate = (0,int(i/10),1000)
-        print "\n\nRUN TEST WITH ERROR RATE = %s, LOSS = %s" % (errorRate, lossRate)
-        test.runTest(sys.argv[1], sys.argv[2], errorRate=errorRate, lossRate=lossRate)
