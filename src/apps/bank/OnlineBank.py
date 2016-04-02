@@ -1170,8 +1170,15 @@ class BankClientSimpleCommand(object):
                                                        "Could not execute bank command. Reason: %s" % str(failure)))
     
     def __call__(self, protocol, account, cmd, *args, **kargs):
+        conn_d = protocol.waitForConnection()
         final_d = defer.Deferred()
         cmdState = [protocol, account, cmd, args, kargs, final_d]
+        conn_d.addCallback(lambda result: self.__startLogin(cmdState))
+        conn_d.addErrback(lambda failure: self.__failed(final_d, protocol, "Could not connect. %s" % str(failure)))
+        return final_d
+    
+    def __startLogin(self, cmdState):
+        protocol, account, cmd, args, kargs, final_d = cmdState
         d = protocol.loginToServer()
         d.addCallback(lambda result: self.__loginSucceeded(cmdState))
         d.addErrback(lambda failure: self.__failed(final_d, protocol, 
