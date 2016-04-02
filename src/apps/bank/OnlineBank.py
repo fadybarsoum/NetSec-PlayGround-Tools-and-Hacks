@@ -4,7 +4,7 @@ Created on Mar 27, 2014
 @author: sethjn
 '''
 
-import playground, random, sys, os, getpass, pickle, shelve, base64, time, traceback
+import playground, random, sys, os, getpass, pickle, shelve, base64, time, traceback, datetime
 from BankMessages import OpenSession, SessionOpen, BalanceRequest, TransferRequest, Close
 from BankMessages import BalanceResponse, Receipt, LoginFailure, RequestFailure
 from BankMessages import DepositRequest, CreateAccountRequest, SetUserPasswordRequest, AdminBalanceRequest
@@ -38,21 +38,22 @@ PasswordHash = lambda pw: SHA.new(pw).digest()
 
 BANK_FIXED_PLAYGROUND_PORT = 700
 
-class SafeFileStream(object):
-    def __init__(self, filename):
-        self.__filename = filename
+class SafeRotatingFileStream(object):
+    def __init__(self, basename):
+        self.__basename = basename
     def write(self, msg):
+        filename = self.__basename + "." + datetime.date.fromtimestamp(time.time()).isoformat() + ".log"
         mode = "a"
-        if not os.path.exists(self.__filename):
+        if not os.path.exists(filename):
             mode = "w+"
-        with open(self.__filename,mode) as f:
+        with open(filename,mode) as f:
             f.write(msg)
         return len(msg)
     def flush(self):
         return
 def enableSecurityLogging(bankpath):
-    logpath = os.path.join(bankpath, "securitylog."+str(time.time())+".log")
-    loghandler = logging.StreamHandler(SafeFileStream(logpath))
+    logpath = os.path.join(bankpath, "securitylog")
+    loghandler = logging.StreamHandler(SafeRotatingFileStream(logpath))
     logging.getLogger('').addHandler(loghandler)
     loghandler.setLevel("CRITICAL")
 def logSecure(msg):
