@@ -225,7 +225,7 @@ class BankServerProtocol(playground.network.common.SimpleMessageHandlingProtocol
         peer = self.transport.getPeer()
         if not peer: return False
         addr = peer.host
-        if addr[0] != 0: return False
+        if addr[1] != 0: return False
         return True
     
     def __getAdminPermissions(self, requestId=0, fatal=True):
