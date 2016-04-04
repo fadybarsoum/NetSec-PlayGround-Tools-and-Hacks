@@ -281,7 +281,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         
     def connectionLost(self, reason=None):
         SimpleMessageHandlingProtocol.connectionLost(self, reason)
-        logger.info("Connection lost. Reason: %s" % reason)
+        logger.info("%s Connection lost. Reason: %s" % (self._connectionId(), reason))
         self.__factory = None
         
     """def connectionLost(self, reason=None):
@@ -305,12 +305,13 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
             OneshotTimer(lambda: self.__state.state == BasicClient.STATE_OPENING and 
                          self.__error("MCServer %s No Response in %d seconds" % (peerAddr, timeout)) or
                          None).run(timeout)
+        protocolLog(self, logger.info, "%s sending CONNECT" % self._connectionId())
         self.transport.writeMessage(request)
         
     def __handleSessionOpen(self, prot, msg):
         if not self.__state:
             return self.__error("Not ready. No state")
-        protocolLog(self, logger.info, "Got Session Open from %s" % (str(self.transport.getPeer()),))
+        protocolLog(self, logger.info, "%s Got Session Open from %s" % (self._connectionId(), str(self.transport.getPeer())))
         packetTrace(logger, msg, "Session Open msg. State: %s " % self.__state.state)
         if self.__state.state != BasicClient.STATE_OPENING:
             return self.__error("Unexpected session open. State is: %s" % self.__state.state)
@@ -329,7 +330,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     @ConnectedAPI    
     def runMobileCode(self, state, timeout=None):
         self.__state = state
-        logger.info("Starting runMobileCode with state %s, cookie %s, ID %s" % (state.state, state.cookie, state.execId))
+        logger.info("%s Starting runMobileCode with state %s, cookie %s, ID %s" % (self._connectionId(), state.state, state.cookie, state.execId))
         if not state.state == BasicClient.STATE_OPENING:
             raise Exception("Cannot call 'runMobileCode' except from opening state. Got %s instead" % state.state)
         
@@ -376,6 +377,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
                      self.__error("MCServer %s Code not complete within max-runtime (%d)" % 
                                   (self.transport.getPeer(), state.maxRuntime)) or
                      None).run(state.maxRuntime)"""
+        logger.info("%s sending RunMobileCode" % self._connectionId())
         self.transport.writeMessage(wrapMsg)
         
     def __handleSessionOpenFailure(self, prot, msg):
@@ -409,7 +411,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     def __handleMobileCodeAck(self, prot, msg):
         if not self.__state:
             return self.__error("Not ready. No state")
-        protocolLog(self, logger.info, "Got MobileCode Ack from %s" % (str(self.transport.getPeer()),))
+        protocolLog(self, logger.info, "%s Got MobileCode Ack from %s" % (self._connectionId(), str(self.transport.getPeer())))
         packetTrace(logger, msg, "Mobile Code Ack. State: %s, Cookie: %s " % (self.__state.state, self.__state.cookie))
         if self.__state.state not in [BasicClient.STATE_WAITING, BasicClient.STATE_RUNNING]:
             return self.__error("Unexpected mobile code ack. State is: %s, Cookie is: %s" % (self.__state.state,
@@ -423,11 +425,12 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
             if not msgObj.MobileCodeAccepted:
                 message = hasattr(msgObj,"Message") and msgObj.Message or ""
                 return self.__error("Code not accepted. " + message)
+            self.logger("%s now believes that mobile code is running on peer" % self._connectionId())
             self.__state.state = BasicClient.STATE_RUNNING
             self.__factory.protocolSignalsMobileCodeAccepted(self.__state)
         else:
             # just an ack from trying to get the result. Code not yet ready
-            protocolLog(self, logger.info, "Got a MobileCodeAck letting us know the code isn't ready")
+            protocolLog(self, logger.info, "%s Got a MobileCodeAck letting us know the code isn't ready" % self._connectionId())
             if hasattr(msgObj, "Message") and msgObj.Message:
                 logger.info("ACK message: %s" % msgObj.Message)
             self.__factory.protocolSignalsMobileCodeAccepted(self.__state)
@@ -440,6 +443,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         request = MessageData.GetMessageBuilder(CheckMobileCodeResult)
         request["Cookie"].setData(state.cookie)
         self.__state = state
+        self.logger.info("%s sending CheckMobileCodeResult" % self._connectionId())
         self.transport.writeMessage(request)
         
     def __handleEncryptedResult(self, prot, msg):
@@ -454,7 +458,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
             self.transport.loseConnection()
             return
         packetTrace(logger, msg, "Encrypted Result. Cookie %s, State: %s " % (self.__state.cookie, self.__state.state))
-        protocolLog(self, logger.info, "Got Encrypted Result of len %d from %s" % (len(msgObj.EncryptedMobileCodeResultPacket),
+        protocolLog(self, logger.info, "%s Got Encrypted Result of len %d from %s" % (self._connectionId(), len(msgObj.EncryptedMobileCodeResultPacket),
                                                                 str(self.transport.getPeer()),))
         if self.__state.cookie != msgObj.Cookie:
             # ignore mismatching cookies
@@ -507,7 +511,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         if state.state != BasicClient.STATE_PURCHASE:
             self.__error("Not in correct mode to send proof of payment. Got %s, cookie %s" % 
                             (state.state, state.cookie))
-        protocolLog(self, logger.info, "Sending proof of payment for cookie %s" % state.cookie)
+        protocolLog(self, logger.info, "%s Sending proof of payment for cookie %s" % (self._connectionId(), state.cookie))
         request = MessageData.GetMessageBuilder(PurchaseDecryptionKey)
         request["Cookie"].setData(state.cookie)
         request["Receipt"].setData(receipt)
@@ -518,7 +522,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     def __handleDecryptionKeyResult(self, prot, msg):
         if not self.__state:
             return self.__error("Not ready. No state")
-        protocolLog(self, logger.info, "Got Decryption Result from %s" % (str(self.transport.getPeer()),))
+        protocolLog(self, logger.info, "%s Got Decryption Result from %s" % (self._connectionId(), str(self.transport.getPeer())))
         packetTrace(logger, msg, "Decryption Result State: %s " % self.__state.state)
         if self.__state.state != BasicClient.STATE_PURCHASE:
             return self.__error("Unexpected mobile code ack. State is: %s" % self.__state.state)
@@ -544,6 +548,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
             raise Exception("Can only rerequest key in a finished state. Got " + state.state)
         request = MessageData.GetMessageBuilder(RerequestDecryptionKey)
         request["Cookie"].setData(state.cookie)
+        logger.info("%s RerequestDecryptionKey" % self._connectionId())
         self.transport.writeMessage(request)
         
 class RemoteCodeStats(object):
@@ -1110,7 +1115,13 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             return #False, "Could not restore data: " + str(e)
         mobileCodeResultObj = mobileCodeResultPacket.data()
         picklePart = (mobileCodeResultObj.success and mobileCodeResultObj.resultPickled or mobileCodeResultObj.exceptionPickled)
+        reactor.callInThread(self.runControlCallback, data, cookie, mobileCodeResultObj, picklePart)
+
+    def runControlCallback(self, data, cookie, mobileCodeResultObj, picklePart):
         success, errMsg = self.__parallelControl.pickleBack(data.execId, mobileCodeResultObj.success, picklePart)
+        reactor.callFromThread(self.returnFromControlCallback, data, cookie, picklePart, success, errMsg)
+
+    def returnFromControlCallback(self, data, cookie, picklePart, success, errMsg):
         if not success:
             self.__blackList.add(data.addr)
             logger.error("Will blacklist %s for bad computation." % data.addr)
