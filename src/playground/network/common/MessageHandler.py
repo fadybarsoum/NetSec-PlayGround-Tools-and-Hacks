@@ -133,7 +133,7 @@ class SimpleMessageHandlingProtocol(Protocol, SimpleMessageHandler):
         SimpleMessageHandler.__init__(self)
         
     def messageReceived(self, msg):
-        logger.debug("Message received for protocol %s" % self)
+        logger.debug("Message received for protocol %s" % self._connectionId())
         try:
             success = self.handleMessage(self, msg)
             if not success:

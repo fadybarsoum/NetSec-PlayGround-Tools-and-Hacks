@@ -44,6 +44,14 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
             self.__streamIterator = None
         # set defaults
         self.changeTimerClass()
+
+    def _connectionId(self):
+        idStr = str(self)
+        if self.transport:
+          idStr += " (%s to %s)" % (self.transport.getHost(), self.transport.getPeer())
+        else:
+          idStr += " (%s not connected)" % (self._addr)
+        return idStr
         
     def reportError(self, error, explicitReporter=None, stackHack=0):
         peer = self.transport and str(self.transport.getPeer()) or "<NOT CONNECTED>"
@@ -83,7 +91,7 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         """
         Subclasses should NOT overwrite this method!
         """
-        logger.info("%s received %d bytes" % (self, len(buf)))
+        logger.info("%s received %d bytes" % (self._connectionId(), len(buf)))
         if self.__dataHandlingMode == "internet":
             self.__internetDataReceived(buf)
         else:
@@ -91,9 +99,9 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
         
     def __playgroundDataReceived(self, buf):
         self.__packetStorage.append(buf)
-        logger.debug("New buffer received. Buffer count %s" %  len(self.__packetStorage))
+        logger.debug("%s New buffer received. Buffer count %s" %  (self._connectionId(), len(self.__packetStorage)))
         while self.__packetStorage and self.__packetStorage[0]:
-            logger.debug("Stream deser. first buffer size is %d" % len(self.__packetStorage[0]))
+            logger.debug("%s Stream deser. first buffer size is %d" % (self._connectionId(), len(self.__packetStorage[0])))
             if not self.__streamIterator:
                 self.__streamIterator = MessageData.DeserializeStream(self.__packetStorage)
             try:
@@ -101,14 +109,14 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
             except StopIteration:
                 messageBuilder = None
                 self.__streamIterator = None
-                self.reportError("Could not get messageBuilder")
+                self.reportError("%s Could not get messageBuilder" % self._connectionId())
                 # we need to not keep trying with the current buffer
                 # advance packetStorage at least one byte.
                 if self.__packetStorage and self.__packetStorage[0]:
                     self.__packetStorage[0] = self.__packetStorage[0][1:]
                 continue
             except Exception, e:
-                logger.error("Deserialization error in protocol")
+                logger.error("%s Deserialization error in protocol" % self._connectionId())
                 logger.error("Current first 100 bytes of buf when error happened: %s" % unicode(buf[:100],errors='ignore'))
                 logger.error("Buf count %d" % len(self.__packetStorage))
                 self.reportException(e, explicitReporter=Protocol.dataReceived)
@@ -122,12 +130,12 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
                 self.__packetStorage = []
                 return
             if not messageBuilder:
-                logger.debug("Not enough bytes to completely deserialize")
+                logger.debug("%s Not enough bytes to completely deserialize" % self._connectionId())
                 # there shouldn't be any left over bytes
                 logger.debug("Remaining buffers lengths: %s" % map(len, self.__packetStorage))
                 return
             else:
-                logger.debug("Message deserialized")
+                logger.debug("%s Message deserialized %s" % (self._connectionId(), messageBuilder))
                 self.__streamIterator = None
                 self.messageReceived(messageBuilder)
         
@@ -140,9 +148,9 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
             except Exception, e:
                 self.reportException(e, explicitReporter=Protocol.dataReceived)
             if not msgBuilder:
-                self.reportError("Could not get messageBuilder.")
+                self.reportError("%s Could not get messageBuilder." % self._connectionId())
             else:
-                logger.info("Consumed %d bytes rebuilding %s" % (bytesConsumed, msgBuilder))
+                logger.info("%s Consumed %d bytes rebuilding %s" % (self._connectionId(), bytesConsumed, msgBuilder))
                 self.messageReceived(msgBuilder)
             packetBytes = self.__packetStorage.popPacket()
             

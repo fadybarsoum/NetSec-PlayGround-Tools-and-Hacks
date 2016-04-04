@@ -553,6 +553,7 @@ class ClientBaseProtocol(SimpleMIBClientProtocol):
             packet = self.__packetStorage.popPacket()"""
         
     def messageReceived(self, msg):
+        logger.debug("Message %s received by ClientBase of %s" % (msg, self.__addr))
         packetTrace(logger, msg, "Msg received by client base protocol. Passing to handler")
         if not self.__client:
             logger.error("Message received after connection closed.")

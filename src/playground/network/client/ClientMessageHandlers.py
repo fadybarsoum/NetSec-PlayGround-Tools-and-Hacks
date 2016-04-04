@@ -182,9 +182,11 @@ class Client2ClientHandler(object):
         msgObj = msg.data()
         dstAddress = msgObj.dstAddress
         dstPort = msgObj.dstPort
+        logger.debug("%s received message for %s" % (protocol, (dstAddress, dstPort)))
         packetTrace(logger, msg, "Begin processing c2c message for %s" % ((dstAddress, dstPort),))
         if not self.__portToProtocol.has_key(dstPort):
             """ There is no service for the specified port. Fail silently (drop packet) """
+            logger.debug("No service. DROP")
             packetTrace(logger, msg, "No service specified for port %d" % dstPort)
             return 
         
@@ -218,12 +220,15 @@ class Client2ClientHandler(object):
             """ We have a new connection. Create transport """
             connectionProtocol = resultArg
             connectionProtocol.makeConnection(ClientApplicationTransport(protocol.transport, thisAddressPair, peerAddressPair, self.__closer, protocol.multiplexingProducer()))
+            logger.debug("New Connection %s" % connectionProtocol._connectionId())
             packetTrace(logger, msg, "New connection created from %s:%d to %s:%d" % (peerHost, peerPort, dstAddress, dstPort))
         else:
+            logger.debug("Existing Connection %s" % connectionProtocol._connectionId())
             packetTrace(logger, msg, "Existing connection identified.")
         
         """ Pass the encapsulated message up """
         if hasattr(msgObj, "ID"):
+            logger.debug("FRAG")
             packetTrace(logger, msg, "Is a c2c fragment. Combining with %d" % msgObj.ID)
             if not self.__frags.has_key(msgObj.ID):
                 self.__frags[msgObj.ID] = {"last":None}
@@ -243,6 +248,7 @@ class Client2ClientHandler(object):
                     packetIndexes.sort()
                     for packetIndex in packetIndexes:
                         reassembled += self.__frags[msgObj.ID][packetIndex]
+                    logger.debug("Last Frag. Passing up %d bytes" % len(reassembled))
                     packetTrace(logger, msg, "Pass reassembled message up to %s" % connectionProtocol)
                     try:
                         connectionProtocol.dataReceived(reassembled)
@@ -253,6 +259,7 @@ class Client2ClientHandler(object):
         else:
             packetTrace(logger, msg, "Pass message up to %s" % connectionProtocol)
             trueMessage = msgObj.clientPacket
+            logger.deubg("Passing up encapsulated data %d bytes" % len(trueMessage))
             try:
                 connectionProtocol.dataReceived(trueMessage)
             except Exception, e:
