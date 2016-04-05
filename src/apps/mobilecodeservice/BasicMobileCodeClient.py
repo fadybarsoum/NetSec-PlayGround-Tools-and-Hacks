@@ -301,6 +301,8 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         self.__factory = None
         if self.__awaitingResponse != None:
             factory.protocolSignalsError(self.__state, "Unexpected loss of connection while waiting for %s. [%s]" % (self.__awaitingResponse, reason))
+        elif self._connectionState == SimpleMessageHandlingProtocol.PRECONNECTION_STATE:
+            factory.protocolSignalsError(self.__state, "Could not connect to mobile code server")
 
     """def connectionLost(self, reason=None):
         playground.network.common.SimpleMessageHandlingProtocol.connectionLost(self, reason)
