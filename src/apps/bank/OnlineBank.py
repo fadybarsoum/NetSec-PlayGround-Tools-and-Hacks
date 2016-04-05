@@ -24,6 +24,7 @@ from playground.config import LoadOptions
 from playground.error import ErrorHandler
 from PlaygroundNode import PlaygroundNode, StandaloneTask
 from playground.network.common.MessageHandler import SimpleMessageHandlingProtocol
+from twisted.python.failure import Failure
 logger = logging.getLogger(__file__)
 
 from BankCore import Ledger, LedgerLine
@@ -1144,6 +1145,7 @@ class BankClientSimpleCommand(object):
     def __failed(self, final_d, protocol, errMsg):
         protocol.close()
         final_d.errback(Exception(errMsg))
+        return Failure
     
     def __cmdSucceeded(self, final_d, protocol, result ):
         protocol.close()
@@ -1375,6 +1377,7 @@ class AdminBankCLIClient(CLIShell, ErrorHandler):
     def __failed(self, e):
         self.transport.write("  Operation failed. Reason: %s\n" % str(e))
         self.reset()
+        return Failed
         
     def handleError(self, message, reporter=None, stackHack=0):
         self.transport.write("Client Error: %s\n" % message)
