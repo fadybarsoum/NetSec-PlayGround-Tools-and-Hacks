@@ -969,6 +969,9 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             except Exception, e:
                 logger.error("Could not alert parallel program that code failed for id %s. Reason: %s" % 
                              (codeData.execId, e))
+        if fatal:
+            return Failure
+        return None
 
     def registerEncryptedResult(self, result):
         cookie, EncryptedMobileCodeResultPacket, billingRate, account = result
@@ -1076,6 +1079,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         bankProtocol.close()
         logger.error("Login to bank failed: " + str(failure))
         finalCallback(None, None)
+        return Failure
         # don't return failure unless you want this to halt execution in some way
         #return failure
     
@@ -1083,6 +1087,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         bankProtocol.close()
         logger.error("Switch to account %s failed: %s" % (self.__myAccount, failure))
         finalCallback(None, None)
+        return Failure
         # don't return failure unless you want this to halt execution in some way
         #return failure
         
@@ -1098,6 +1103,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         bankProtocol.close()
         logger.error("Bank transfer failed: %s" % failure)
         finalCallback(None, None)
+        return Failure
         # Don't return the failure unless you want this to halt execution in some way
         #return failure
         
