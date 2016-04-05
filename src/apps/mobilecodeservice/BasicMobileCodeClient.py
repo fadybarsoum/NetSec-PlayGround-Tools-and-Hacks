@@ -37,6 +37,7 @@ from playground.playgroundlog import packetTrace, logging, protocolLog
 from apps.mobilecodeservice.ServiceMessages import CheckMobileCodeResult
 from playground.network.common.Timer import OneshotTimer
 from playground.network.common.MessageHandler import SimpleMessageHandlingProtocol
+from twisted.python.failure import Failure
 logger = logging.getLogger(__file__)
 
 from playground.config import GlobalPlaygroundConfigData
@@ -817,6 +818,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
             if self.__openClients.has_key(peer):
                 del self.__openClients[peer]
             self.__connectionFailures[peer] = time.time()
+            return Failure
         return errback
         
     def __checkClients(self):
