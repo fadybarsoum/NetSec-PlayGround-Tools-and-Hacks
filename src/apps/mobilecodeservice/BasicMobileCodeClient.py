@@ -130,12 +130,24 @@ class BasicClient(object):
         return pod.d
     
     def protocolSignalsError(self, state, msg):
+        state = self.execIdToSession.get(state.execId, None)
+        if not state:
+            state = self.sessions.get(state.cookie, None)
+        if state and state.d:
+            state.d.errback(Exception(msg))
         if self.execIdToSession.has_key(state.execId):
             # we should be able to delete here, because we just got a response
             del self.execIdToSession[state.execId]
         if self.sessions.has_key(state.cookie):
             del self.sessions[state.cookie]
-        
+
+    """def protocolSignalsConnectionList(self, state, msg):
+        state = self.execIdToSession.get(state.execId, None)
+        if not state:
+            state = self.sessions.get(state.cookie, None)
+        if state and state.d:
+            self.protocolSignalsError(state, "Unexpected loss of connection before deferred.")"""
+
     def __validDestAccount(self, account):
         return True
         
@@ -240,6 +252,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         playground.network.common.SimpleMessageHandlingProtocol.__init__(self, factory, addr)
         self.__factory = factory
         self.__state = None
+        self.__awaitingResponse = False
         self.runWhenConnected = []
         self.registerMessageHandler(SessionOpen, self.__handleSessionOpen)
         self.registerMessageHandler(SessionOpenFailure, self.__handleSessionOpenFailure)
@@ -260,6 +273,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         return []"""
         
     def __error(self, msg, fatal=True):
+        self.__awaitingResponse = False
         self.reportError(msg)
         # this call later prevents problems if we've just had the connection established
         self.callLater(0,lambda: self.transport and self.transport.loseConnection())
@@ -282,8 +296,11 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     def connectionLost(self, reason=None):
         SimpleMessageHandlingProtocol.connectionLost(self, reason)
         logger.info("%s Connection lost. Reason: %s" % (self._connectionId(), reason))
+        factory = self.__factory
         self.__factory = None
-        
+        if self.__awaitingResponse:
+            factory.protocolSignalsError(self.__state, "Unexpected loss of connection [%s]" % reason)
+
     """def connectionLost(self, reason=None):
         playground.network.common.SimpleMessageHandlingProtocol.connectionLost(self, reason)
         protocolLog(self, logger.info, "Connection lost: %s. Current state: %s" % (str(reason), self.__mode))
@@ -306,11 +323,13 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
                          self.__error("MCServer %s No Response in %d seconds" % (peerAddr, timeout)) or
                          None).run(timeout)
         protocolLog(self, logger.info, "%s sending CONNECT" % self._connectionId())
+        self.__awaitingResponse = True
         self.transport.writeMessage(request)
         
     def __handleSessionOpen(self, prot, msg):
         if not self.__state:
             return self.__error("Not ready. No state")
+        self.__awaitingResponse = False
         protocolLog(self, logger.info, "%s Got Session Open from %s" % (self._connectionId(), str(self.transport.getPeer())))
         packetTrace(logger, msg, "Session Open msg. State: %s " % self.__state.state)
         if self.__state.state != BasicClient.STATE_OPENING:
@@ -378,6 +397,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
                                   (self.transport.getPeer(), state.maxRuntime)) or
                      None).run(state.maxRuntime)"""
         logger.info("%s sending RunMobileCode" % self._connectionId())
+        self.__awaitingResponse = True
         self.transport.writeMessage(wrapMsg)
         
     def __handleSessionOpenFailure(self, prot, msg):
@@ -411,6 +431,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     def __handleMobileCodeAck(self, prot, msg):
         if not self.__state:
             return self.__error("Not ready. No state")
+        self.__awaitingResponse = False
         protocolLog(self, logger.info, "%s Got MobileCode Ack from %s" % (self._connectionId(), str(self.transport.getPeer())))
         packetTrace(logger, msg, "Mobile Code Ack. State: %s, Cookie: %s " % (self.__state.state, self.__state.cookie))
         if self.__state.state not in [BasicClient.STATE_WAITING, BasicClient.STATE_RUNNING]:
@@ -425,7 +446,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
             if not msgObj.MobileCodeAccepted:
                 message = hasattr(msgObj,"Message") and msgObj.Message or ""
                 return self.__error("Code not accepted. " + message)
-            self.logger("%s now believes that mobile code is running on peer" % self._connectionId())
+            logger.info("%s now believes that mobile code is running on peer" % self._connectionId())
             self.__state.state = BasicClient.STATE_RUNNING
             self.__factory.protocolSignalsMobileCodeAccepted(self.__state)
         else:
@@ -443,7 +464,8 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         request = MessageData.GetMessageBuilder(CheckMobileCodeResult)
         request["Cookie"].setData(state.cookie)
         self.__state = state
-        self.logger.info("%s sending CheckMobileCodeResult" % self._connectionId())
+        logger.info("%s sending CheckMobileCodeResult" % self._connectionId())
+        self.__awaitingResponse = True
         self.transport.writeMessage(request)
         
     def __handleEncryptedResult(self, prot, msg):
@@ -452,6 +474,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         
         if self.__state.state != BasicClient.STATE_RUNNING:
             return self.__error("Unexpected encrypted result. State is: %s" % self.__state.state)
+        self.__awaitingResponse = False
         msgObj = msg.data()
         if msgObj.EncryptedMobileCodeResultPacket == '':
             # Still running. Not completed yet
@@ -517,11 +540,13 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         request["Receipt"].setData(receipt)
         request["ReceiptSignature"].setData(receiptSignature)
         self.__state=state
+        self.__awaitingResult = True
         self.transport.writeMessage(request)
         
     def __handleDecryptionKeyResult(self, prot, msg):
         if not self.__state:
             return self.__error("Not ready. No state")
+        self.__awaitingResult = False
         protocolLog(self, logger.info, "%s Got Decryption Result from %s" % (self._connectionId(), str(self.transport.getPeer())))
         packetTrace(logger, msg, "Decryption Result State: %s " % self.__state.state)
         if self.__state.state != BasicClient.STATE_PURCHASE:
@@ -546,6 +571,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
     def rerequestKey(self, state):
         if state.state != BasicClient.STATE_FINISHED:
             raise Exception("Can only rerequest key in a finished state. Got " + state.state)
+        self.__awaitingResult = True
         request = MessageData.GetMessageBuilder(RerequestDecryptionKey)
         request["Cookie"].setData(state.cookie)
         logger.info("%s RerequestDecryptionKey" % self._connectionId())
