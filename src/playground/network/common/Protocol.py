@@ -47,10 +47,10 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
 
     def _connectionId(self):
         idStr = str(self)
-        if self.transport:
-          idStr += " (%s to %s)" % (self.transport.getHost(), self.transport.getPeer())
+        if self.transport and self._connectionState == self.CONNECTED_STATE:
+            idStr += " (%s to %s)" % (self.transport.getHost(), self.transport.getPeer())
         else:
-          idStr += " (%s not connected)" % (self._addr)
+            idStr += " (%s not connected)" % (self._addr)
         return idStr
         
     def reportError(self, error, explicitReporter=None, stackHack=0):
