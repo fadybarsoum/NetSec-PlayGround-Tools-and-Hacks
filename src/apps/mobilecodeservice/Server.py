@@ -371,6 +371,7 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         db = shelve.open(persistentDb,"c")
         for k in db.keys():
             self.__connData[k] = db[k]
+        db.close()
         #self.__connDataPersistent = shelve.open(persistentDb, "c")
         self.__persistentDbFile = persistentDb
         self.__clearStaleKeys()
