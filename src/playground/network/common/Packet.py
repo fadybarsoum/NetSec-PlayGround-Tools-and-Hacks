@@ -150,6 +150,8 @@ class Packet(ErrorHandlingMixin):
             # It's the start of the packet + the current frame start + frame size
             seedOffset = rebuildOffset + framingSize
             
+            if Packet.TRAILER_SIZE > (len(buf)-seedOffset):
+                return (Packet.BUFFER_STATUS_BAD_FRAMING, "Inconsistent internal length")
             # we've restored the seed from the end of the frame
             trailerSeed = struct.unpack_from(Packet.TRAILER_FORMAT, buf, seedOffset)[0]
             if trailerSeed != seed:
