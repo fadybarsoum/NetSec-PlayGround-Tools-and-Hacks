@@ -16,6 +16,7 @@ from twisted.internet.endpoints import TCP4ServerEndpoint
 from twisted.internet import reactor
 
 from ServerMessageHandlers import *
+from ChaperoneInterceptHandler import encapsulatedMessageHandler, messageInterceptor, ChaperoneInterceptHandler
 
 import random, os, array, copy
 
@@ -68,6 +69,8 @@ class PlaygroundServerProtocol(MIBServerProtocol):
         self.__addressData = {}
         self.__producer = BacklogProducer()
         #self.__packetStorage = PacketStorage()
+        self.__interceptHandler = ChaperoneInterceptHandler()
+        self.__interceptHandler.registerMessages(self)
         
     """def dataReceived(self, buf):
         self.__packetStorage.update(buf)
@@ -96,6 +99,7 @@ class PlaygroundServerProtocol(MIBServerProtocol):
         """ Clear circular connections """
         self.server = None
         self.__producer.close()
+        self.__interceptHandler.close()
         
     def producerWrite(self, msg):
         self.__producer.write(msg)
@@ -139,6 +143,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
         self.setNetworkErrorRate(0, 0, 0)
         
         client2ClientHandler = ClientToClientHandler(self, self.__addressToConnection)
+        client2ClientHandler.registerAdditionalHandler(messageInterceptor)
         client2ClientHandler.registerAdditionalHandler(self.__networkErrorPacketHandler)
         
         """ Register all message handlers """
@@ -154,6 +159,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
         self.registerMessageHandler(
                                     playground.base.GetPeers,
                                     GetPeersHandler(self, self.__addressToConnection))
+        self.registerMessageHandler(playground.intercept.EncapsulatedC2C, encapsulatedMessageHandler)
         self.__loadMibs()
         self.__resetStatistics()
         

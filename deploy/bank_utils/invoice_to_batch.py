@@ -22,13 +22,14 @@ for invoicefile in invoiceFiles:
     for line in f.readlines():
       line = line.strip()
       k,v = line.split(":")
+      k = k.upper()
       if k == "DETAILS": break
       d_copy[k] = v
   if None in d_copy.values():
     print "Missing required filed in invoice %s" % invoicefile
     continue
   total += int(d_copy["AMOUNT"])
-  memo = "Invoice #%d, submitted by %s on behalf of %s on %s" % (int(d_copy["INVOICE"]), d_copy["FROM"], d_copy["COMPANY"], d_copy["DATE"])
+  memo = "Invoice #%s, submitted by %s on behalf of %s on %s" % (d_copy["INVOICE"], d_copy["FROM"], d_copy["COMPANY"], d_copy["DATE"])
   outputlines.append('account transfer %s %d "%s"' % (d_copy["ACCOUNT"], int(d_copy["AMOUNT"]), memo)) 
 outputlines = ["account switch illuminati"] + outputlines
 with open(batchfile, "w+") as f:

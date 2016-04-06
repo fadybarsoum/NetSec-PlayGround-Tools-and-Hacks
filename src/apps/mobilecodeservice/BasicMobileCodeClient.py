@@ -354,7 +354,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         self.__state = state
         logger.info("%s Starting runMobileCode with state %s, cookie %s, ID %s" % (self._connectionId(), state.state, state.cookie, state.execId))
         if not state.state == BasicClient.STATE_OPENING:
-            raise Exception("Cannot call 'runMobileCode' except from opening state. Got %s instead" % state.state)
+            return self.__error("Cannot call 'runMobileCode' except from opening state. Got %s instead" % state.state)
         
         """success, data = self.__factory.getCodeForConnection(msgObj.ClientNonce,
                                                                              msgObj.ServerNonce,
