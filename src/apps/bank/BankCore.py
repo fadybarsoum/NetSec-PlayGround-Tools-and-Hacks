@@ -10,6 +10,7 @@ from PermanentObject import PermanentObjectMixin
 from collections import OrderedDict
 from PrintingPress import BitPointVerifier
 from Exchange import BitPoint
+from Crypto.Signature import PKCS1_v1_5
 
 
 class LedgerLine(object):
@@ -592,6 +593,23 @@ def main(BankCoreModule, args):
         for account in bank.getAccounts():
             if account == "VAULT": continue
             bank.transfer("VAULT", account, 100)
+    elif args[0] == "display_receipt":
+        receiptFile, sigFile, cert = args[1:4]
+        with open(receiptFile) as f:
+            receiptData=f.read()
+        with open(sigFile) as f:
+            sigData=f.read()
+        with open(cert) as f:
+            certData=f.read()
+        cert=X509Certificate.loadPEM(certData)
+        pubKey=RSA.importKey(cert.getPublicKeyBlob())
+        verifier=PKCS1_v1_5.new(pubKey)
+        receipt = pickle.loads(receiptData)
+        print "Receipt:", receipt.toHumanReadableString()
+        if verifier.verify(SHA.new(receiptData), sigData):
+            print "Receipt is signed by the bank."
+        else:
+            print "Receipt is forged"
         
 if __name__ == "__main__":
     # import ourself. This is necessary for importing
