@@ -2,7 +2,7 @@
 [ req ]
 default_bits = 2048 # Size of keys
 default_keyfile = key.pem # name of generated keys
-default_md = sha1 # message digest algorithm
+default_md = sha256 # message digest algorithm
 string_mask = nombstr # permitted characters
 distinguished_name = req_distinguished_name
 
