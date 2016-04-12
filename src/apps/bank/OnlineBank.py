@@ -1377,7 +1377,7 @@ class AdminBankCLIClient(CLIShell, ErrorHandler):
     def __failed(self, e):
         self.transport.write("  Operation failed. Reason: %s\n" % str(e))
         self.reset()
-        return Failed
+        return Failure
         
     def handleError(self, message, reporter=None, stackHack=0):
         self.transport.write("Client Error: %s\n" % message)
