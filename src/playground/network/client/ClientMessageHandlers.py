@@ -40,12 +40,14 @@ class RunMobileCodeHandler(object):
     def __init__(self, server, **executionHandlers):
         self.__server = server
         self.__executionHandlers = executionHandlers.copy()
-        self.__executionHandlers["serialized"] = self.__serializedCodeHandler
+        if not self.__executionHandlers.has_key("serialized"):
+            self.__executionHandlers["serialized"] = self.__serializedCodeHandler
+        logger.info("Registering mobile code handler with execution handlers for %s" % self.__executionHandlers.keys())
         self.__peer = "<UNNOWN PEER>"
             
     def __defaultCodeHandler(self, codeString):
         try:
-            logger.info("executing codestring")
+            logger.info("executing codestring (default handler)")
             logger.info(codeString)
             d = {}
             exec(codeString, d, d)
@@ -58,7 +60,7 @@ class RunMobileCodeHandler(object):
     
     def __serializedCodeHandler(self, codeString):
         try:
-            logger.info("executing codestring")
+            logger.info("executing codestring (serialized handler)")
             logger.info(codeString)
             obj = pickle.loads(codeString)
             result = obj()
@@ -77,7 +79,7 @@ class RunMobileCodeHandler(object):
                 reactor.callLater(.1, d.callback, (str(e), pickle.dumps(e), "", ""))
                 return d
             else:
-                handler = self.__defaultCodeHandler
+                handler = self.__executionHandlers.get("__default__", self.__defaultCodeHandler)
         
         """ Run the remote code. Wait for deferred result """
         deferredResult = deferToThread(handler, codeString)
@@ -110,6 +112,7 @@ class RunMobileCodeHandler(object):
         codeString = msgObj.pythonCode
         mechanism = msgObj.mechanism
         strict = msgObj.strict
+        logger.info("RunMobileCode with mechanism %s (strict=%s)" % (mechanism, strict))
 
         toClientMsg["ID"].setData(msgObj.ID)
         

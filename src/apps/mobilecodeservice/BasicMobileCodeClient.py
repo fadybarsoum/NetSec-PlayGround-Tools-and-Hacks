@@ -376,7 +376,7 @@ class BasicClientProtocol(playground.network.common.SimpleMessageHandlingProtoco
         request = MessageData.GetMessageBuilder(definitions.playground.base.RunMobileCode)
         request["ID"].setData(state.execId)
         request["pythonCode"].setData(state.mobileCodeString)
-        request["mechanism"].setData("pickle")
+        request["mechanism"].setData("sandbox")
         serializedMsg = request.serialize()
         state.codeHash = SHA.new(serializedMsg).digest()
         wrapMsg = MessageData.GetMessageBuilder(SessionRunMobileCode)

@@ -9,6 +9,7 @@ from playground.crypto import X509Certificate
 from playground.network.common import Packet, MIBAddressMixin
 from playground.network.message import definitions
 from playground.network.message import MessageData
+from playground.sandbox.pypy.SandboxCodeRunner import SandboxCodeRunner
 #from playground.network.message import definitions
 from ServiceMessages import OpenSession, SessionOpen, SessionOpenFailure, EncryptedMobileCodeResult
 from ServiceMessages import PurchaseDecryptionKey, RunMobileCodeFailure, AcquireDecryptionKeyFailure
@@ -261,7 +262,7 @@ class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
         #realCodeHandler = playground.extras.sandbox.SandboxCodeunitAdapter(self.SANDBOX_CONTROLLER,
                                                                        #timeout=min(msgObj.MaxRuntime,self.CODE_TIMEOUT))
         #codeHandler = lambda codeUnit: self.__codeHandlerWrapper(realCodeHandler, codeUnit)
-        runMobileCodeHandler = RunMobileCodeHandler(self)#, codeHandler)
+        runMobileCodeHandler = RunMobileCodeHandler(self, sandbox=SandboxCodeRunner())
         runMobileCodeHandler(wrappedProtocol, MessageData.Deserialize(rawRunMobileCodeMsg)[0])
         self.__curState.state = self.STATE_RUNNING
         response = MessageData.GetMessageBuilder(RunMobileCodeAck)

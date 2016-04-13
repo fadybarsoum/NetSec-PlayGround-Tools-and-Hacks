@@ -5,10 +5,10 @@ Created on Mar 21, 2015
 Copied with few modifications from pypy_interact.py (version 2.2.1)
 '''
 import sys, os
-sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from rpython.translator.sandbox.vfs import Dir, RealDir, RealFile
 import pypy
-LIB_ROOT = os.path.dirname(os.path.dirname(pypy.__file__))
+sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(pypy.__file__), "sandbox")))
+from rpython.translator.sandbox.vfs import Dir, RealDir, RealFile
+LIB_ROOT = "/usr/lib/pypy"
 
 from extensible_sandbox import ExtensibleSandboxedProc
 
@@ -37,7 +37,7 @@ class PyPySandboxedProc(ExtensibleSandboxedProc):
         libroot = str(LIB_ROOT)
         
         binDirData = {
-                'pypy-c': RealFile(self.executable),
+                'pypy-c': RealFile(self.executable,  mode=011),
                 'lib-python': RealDir(os.path.join(libroot, 'lib-python'),
                                       exclude=exclude),
                 'lib_pypy': RealDir(os.path.join(libroot, 'lib_pypy'),
