@@ -36,8 +36,13 @@ class PyPySandboxedProc(ExtensibleSandboxedProc):
             tmpdirnode = RealDir(self.tmpdir, exclude=exclude)
         libroot = str(LIB_ROOT)
         
+        try:
+            virtualPypy = RealFile(self.executable, mode=011)
+        except:
+            virtualPypy = RealFile(self.executable) # for backwards compat.
+        
         binDirData = {
-                'pypy-c': RealFile(self.executable,  mode=011),
+                'pypy-c': virtualPypy,
                 'lib-python': RealDir(os.path.join(libroot, 'lib-python'),
                                       exclude=exclude),
                 'lib_pypy': RealDir(os.path.join(libroot, 'lib_pypy'),
