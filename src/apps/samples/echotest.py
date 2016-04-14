@@ -31,10 +31,15 @@ from playground.network.client import ClientBase
 # Server and Client Protocol factories
 from playground.network.client.ClientApplicationServer import ClientApplicationServer, ClientApplicationClient
 
+#config data has useful stuff?
+from playground import configData
+from apps.network.N2P import ResolvingConnector
+
 from twisted.internet import defer, stdio
 from twisted.protocols import basic
 
 import sys, time, os
+from playground.network.common.PlaygroundAddress import PlaygroundAddress
 
 class EchoProtocolMessage(MessageDefinition):
     """
@@ -227,9 +232,26 @@ class ClientTest(basic.LineReceiver):
         self.__d = None
         self.__connectionType = connectionType
         
+    def __handleError(self, e):
+        print "had a failure", e
+        raise Exception("Failure: " + str(e))
+        
     def connectionMade(self):
-        srcPort, self.__protocol = client.connect(EchoClientFactory(), echoServerAddr, 101,
+        resolver = configData.get("network.n2p.resolver_address","")
+        if resolver:
+            connector = ResolvingConnector(self.__client, PlaygroundAddress.FromString(resolver))
+            deferedConnect = connector.connect(EchoClientFactory(), self.__echoServerAddr, 101, self.__connectionType)
+            deferedConnect.addCallback(self.__connectFinished)
+            deferedConnect.addErrback(self.__handleError)
+            return
+        else:
+            self.__echoServerAddr = PlaygroundAddress.FromString(self.__echoServerAddr)
+            srcPort, self.__protocol = self.__client.connect(EchoClientFactory(), self.__echoServerAddr, 101,
                                                       connectionType=self.__connectionType)
+            self.__connectFinished((srcPort, self.__protocol))
+            
+    def __connectFinished(self, result):
+        srcPort, self.__protocol = result
         print "Waiting for server."
         d1 = self.__protocol.notifyClosed()
         d1.addCallback(self.exit)
@@ -309,10 +331,11 @@ if __name__=="__main__":
         
         
     else:
-        try:
-            echoServerAddr = PlaygroundAddress.FromString(mode)
-        except:
-            sys.exit(USAGE)
+        echoServerAddr = mode
+        #try:
+        #    echoServerAddr = PlaygroundAddress.FromString(mode)
+        #except:
+        #    sys.exit(USAGE)
         # This guy will be the client. The server's address is hard coded
         
         tester = ClientTest(client, echoServerAddr, connectionType)
