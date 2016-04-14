@@ -74,7 +74,7 @@ def signCSR(csrfile, CA, CAkey, interactive=True):
 
 def usage():
     print "USAGE: %s <cnf file> [<addr3>] [<addr4>]" % sys.argv[0]
-    print "USAGE: %s raw <cnf file> <raw_name>" % sys.argv[0]
+    print "USAGE: %s raw <cnf file> <raw_name> [<sign_cert> <sign_key>]" % sys.argv[0]
     print "USAGE: %s sign <sign_cert> <sign_key> [csrs...]" % sys.argv[0]
     print "  addr3 and addr4 can only be used if cnf file specifies"
     print "  a group code."
@@ -85,14 +85,18 @@ if __name__ == "__main__":
         sys.exit(-1)
     template = ""
     if sys.argv[1] == "raw":
-        if len(sys.argv) != 4:
+        if len(sys.argv) not in [4,6]:
             usage()
             sys.exit(-1)
         templateFile = sys.argv[2]
         rawName = sys.argv[3]
         with open(templateFile) as f:
             template = f.read()
-        ret = genCert(rawName, template)
+        if len(sys.argv) == 6:
+            caCert = sys.argv[4]
+            caKey = sys.argv[5]
+            ret = genCert(rawName, template, caCert, caKey)
+        else: ret = genCert(rawName, template)
     elif sys.argv[1] == "sign":
         for csr in sys.argv[4:]:
             signCSR(csr, sys.argv[2], sys.argv[3])
