@@ -82,7 +82,9 @@ class Protocol(TwistedProtocol, MIBAddressMixin, ErrorHandlingMixin):
             self.__getTime = time.time
         
     def callLater(self, callDelaySeconds, cb):
-        return self.__timerClass(cb).run(callDelaySeconds)
+        clobj = self.__timerClass(cb)
+        clobj.run(callDelaySeconds)
+        return clobj
     
     def protocolTime(self):
         return self.__getTime()

@@ -9,6 +9,8 @@ from playground.network.client import ClientBase
 
 import hashlib, random, time
 
+from twisted.internet import reactor
+
 class DataMessage(MessageDefinition):
     PLAYGROUND_IDENTIFIER = "test.blackbox.reliable_stream.throughput.DataMessage"
 
@@ -189,11 +191,11 @@ class TestLauncher(object):
         self.chaperoneData = (chaperoneAddr, chaperonePort)
         self.client = None
         
-    def shutdownPlayground(self):
+    def shutdownPlayground(self,delay=1):
         if self.client:
-            self.client.disconnectFromPlaygroundServer(stopReactor=True)
+            reactor.callLater(delay, lambda: self.client.disconnectFromPlaygroundServer(stopReactor=True))
         
-    def startTest(self, testControl, addr, serverAddr, serverPort):
+    def startTest(self, testControl, addr, serverAddr, serverPort, connectionType="RAW"):
     
         #logctx = playgroundlog.LoggingContext()
         #logctx.nodeId = myAddress.toString()
@@ -209,13 +211,13 @@ class TestLauncher(object):
         
         if serverAddr == None or serverAddr == addr:
             print "Starting server on", addr, serverPort, serverAddr
-            self.client.listen(throughputFactory, serverPort, connectionType="RELIABLE_STREAM")
+            self.client.listen(throughputFactory, serverPort, connectionType)
         else:
             serverAddr = PlaygroundAddress.FromString(serverAddr)
             print "connecting client to", serverAddr, serverPort
             self.client.runWhenConnected(lambda: self.client.connect(throughputFactory, 
                                                                 serverAddr, 
                                                                 serverPort,
-                                                                connectionType="RELIABLE_STREAM"))
+                                                                connectionType))
         
         self.client.connectToChaperone(chaperoneAddr, chaperonePort)

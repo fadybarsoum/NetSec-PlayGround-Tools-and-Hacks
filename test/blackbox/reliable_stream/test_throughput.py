@@ -1,7 +1,7 @@
 import framework, sys, time
 
 class ThroughputTestPeer(framework.TestPeer):
-    def __init__(self, testId):
+    def __init__(self, testId, connectionType):
         framework.TestPeer.__init__(self, testId)
         self.chaperoneAddr = None
         self.chaperonePort = None
@@ -9,6 +9,7 @@ class ThroughputTestPeer(framework.TestPeer):
         self.serverAddr = None
         self.serverPort = None
         self.playgroundPath = None
+        self.connectionType = connectionType
         
     def _realStart(self, transmissions, **parameters):
         sys.path.insert(0, self.playgroundPath)
@@ -23,7 +24,8 @@ class ThroughputTestPeer(framework.TestPeer):
                                                   txDelay=.1)
         self.testLauncher = core.TestLauncher(self.chaperoneAddr, self.chaperonePort)
         self.setSharedData("STARTED",True)
-        self.testLauncher.startTest(self.control, self.addr, self.serverAddr, self.serverPort)
+        self.testLauncher.startTest(self.control, self.addr, self.serverAddr, 
+                                    self.serverPort, self.connectionType)
         
     def onTestEnd(self, reason):
         print self.testId(), "Test completed. Shutting down", reason
@@ -146,8 +148,8 @@ class NetSecSpring2016_ReliableTest(object):
             chaperone.join()
             return self.__storeResult(storeResultData)
         
-        client = ThroughputTestPeer("ThroughputClient")
-        server = ThroughputTestPeer("ThroughputServer")
+        client = ThroughputTestPeer("ThroughputClient", "RELIABLE_STREAM")
+        server = ThroughputTestPeer("ThroughputServer", "RELIABLE_STREAM")
         self._configureTestPeer(client, isServer=False)
         self._configureTestPeer(server, isServer=True)
         client.playgroundPath = clientPlaygroundPath
@@ -235,14 +237,13 @@ class NetSecSpring2016_ReliableTest(object):
             storeResultData.serverThroughput = server.throughput()
         return self.__storeResult(storeResultData)
     
-def multiErrorRateTest(impl1, impl2, resultsFileName):
+def multiErrorRateTest(impl1, impl2, resultsFileName, errorRates=None):
+    if not errorRates:
+        errorRates = [0,10,20,30,40,50,60,70,80,90]
     print "Testing %s v %s" % (impl1, impl2)
     test = NetSecSpring2016_ReliableTest()
     
-    print "RUN TEST WITHOUT ERRORS"
-    test.runTest(impl1, impl2)
-    
-    for i in [10,20,30,40,50,60,70,80,90]:
+    for i in errorRates:
         errorRate = (0,i,1000000)
         lossRate = (0,int(i/10),1000)
         print "\n\nRUN TEST WITH ERROR RATE = %s, LOSS = %s" % (errorRate, lossRate)
@@ -258,6 +259,7 @@ if __name__=="__main__":
     args = sys.argv[1:]
     entries = None
     loglevel = "ERROR"
+    selfTest = True
     while args and args[0][0] == '-':
         print args[0]
         flag = args.pop(0)
@@ -268,6 +270,8 @@ if __name__=="__main__":
         elif flag == "--loglevel":
             loglevel = args.pop(0)
             print "loglevel", loglevel
+        elif flag == "--noselftest":
+            selfTest = False
     resultsFileName = args.pop(0)
     if not entries:
         entries = args
@@ -293,6 +297,7 @@ if __name__=="__main__":
         for entry2 in entries:
             entry2 = entry2.strip()
             if not entry2: continue
+            if not selfTest and entry1 == entry2: continue
             entry2 = os.path.expanduser(entry2)
             multiErrorRateTest(entry1, entry2, resultsFileName)
     print "BAKE OFF COMPLETE"
