@@ -289,6 +289,12 @@ class ResolvingConnector(object):
         self.__trueConnectD = defer.Deferred()
         trueConnect = lambda address: self.__trueConnectD.callback(self.__clientBase.connect(factory, address, port, connectionType))
         if not pAddr:
+            if not isinstance(self.__n2pServerAddr, PlaygroundAddress):
+                try:
+                    self.__n2pServerAddr = PlaygroundAddress.FromString(self.__n2pServerAddr)
+                except:
+                    Timer.callLater(self.__trueConnectD.errback(Exception("Could not connect to resolver. Bad address %s" % self.__n2pServerAddr)))
+                    return self.__trueConnectD
             srcport, self.__resolver = self.__clientBase.connect(N2PClient(), 
                                                  self.__n2pServerAddr, N2PServer.DEFAULT_SERVING_PORT,
                                                  "SECURE_STREAM")
@@ -296,7 +302,7 @@ class ResolvingConnector(object):
             d.addCallback(lambda result: self.__resolverConnected(name, trueConnect))
             d.addErrback(self.__resolverConnectFailed)
         else:
-            Timer.callLater(.1,lambda: self.__trueConnectD.callback(name))       
+            Timer.callLater(.1,lambda: trueConnect(pAddr))       
         return self.__trueConnectD
         
     def __resolverConnected(self, nameToResolve, trueConnect):

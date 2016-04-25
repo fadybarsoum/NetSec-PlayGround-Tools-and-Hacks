@@ -1757,7 +1757,6 @@ class PlaygroundNodeControl(object):
     def processClient(self, clientArgs):
         if len(clientArgs) == 2:
             bankPlaygroundAddr, configFile = clientArgs
-            bankPlaygroundAddr = playground.network.common.PlaygroundAddress.FromString(bankPlaygroundAddr)
             if not os.path.exists(configFile):
                 return (False, "No such bank client CLI config file %s" % configFile)
             configOptions = LoadOptions(configFile)
