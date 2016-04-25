@@ -545,7 +545,7 @@ def main():
     pw = getpass.getpass("Account %s password:" % bankOptions["account"])
     bankFactory = PlaygroundOnlineBankClient(cert, bankOptions["user"], pw)
     myAddr = playground.network.common.PlaygroundAddress.FromString(myAddr)
-    bankAddr = playground.network.common.PlaygroundAddress.FromString(bankOptions["bank_addr"])
+    bankAddr = bankOptions["bank_addr"]
     client = playground.network.client.ClientBase(myAddr)
     
     logctx = LoggingContext()
