@@ -40,8 +40,12 @@ from playground.network.common.MessageHandler import SimpleMessageHandlingProtoc
 from twisted.python.failure import Failure
 logger = logging.getLogger(__file__)
 
+from playground import configData as globalConfigData
 from playground.config import GlobalPlaygroundConfigData
 configData = GlobalPlaygroundConfigData.getConfig(__name__)
+
+from apps.network.N2P import ResolvingConnector
+g_ResolverAddr = globalConfigData.get("network.n2p.resolver_address","")
 
 RANDOM_u64 = lambda: random.randint(0,(2**64)-1)
 
@@ -854,12 +858,22 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         self.autoDiscover()
     
     def checkBalance(self):
-        srcPort, bankProtocol = self.__playground.connect(self.__bankFactory,
+        connector = ResolvingConnector(self.__playground, g_ResolverAddr, requireAuthoritative=True)
+        checkBalanceD = defer.Deferred()
+        d = connector.connect(self.__bankFactory,
                                                               self.__bankAddr, 
                                                               BANK_FIXED_PLAYGROUND_PORT,
                                                               connectionType=self.__bankConnectionType)
+        d.addCallback(lambda result: self.__finishCheckBalance(checkBalanceD, result))
+        d.addErrback(checkBalanceD.errback)
+        return checkBalanceD
+        
+    def __finishCheckBalance(self, d, result):
+        srcPort, bankProtocol = result       
         bankCmd = BankClientSimpleCommand()
-        return bankCmd(bankProtocol, self.__myAccount, BankClientProtocol.getBalance)
+        bankCmdD = bankCmd(bankProtocol, self.__myAccount, BankClientProtocol.getBalance)
+        bankCmdD.addCallback(d.callback)
+        bankCmdD.addErrback(d.errback)
         
     
     def buildProtocol(self, addr):
@@ -1047,11 +1061,17 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         """
     
     def __startPurchase(self, addr, account, amount, memo, callback):
-        srcPort, bankProtocolStack = self.__playground.connect(self.__bankFactory,
+        connector = ResolvingConnector(self.__playground, g_ResolverAddr, requireAuthoritative=True)
+        checkBalanceD = defer.Deferred()
+        d = connector.connect(self.__bankFactory,
                                                               self.__bankAddr, 
                                                               BANK_FIXED_PLAYGROUND_PORT,
                                                               connectionType=self.__bankConnectionType)
-        bankProtocol = bankProtocolStack
+        d.addCallback(lambda result: self.__bankAddrResolved(addr, account, amount, memo, callback, result))
+        d.addCallback(lambda failure: self.__bankAddrResolutionFailed(addr, callback, failure))
+        
+    def __bankAddrResolved(self, addr, account, amount, memo, callback, result):
+        srcPort, bankProtocol = result
         logger.info("Logging into bank for %s transfer for work done by %s" % (str(memo), str(addr)))
         d = bankProtocol.waitForConnection()
         d.addCallback(lambda result: self.__startLogin(bankProtocol, addr, account, amount, memo, callback))

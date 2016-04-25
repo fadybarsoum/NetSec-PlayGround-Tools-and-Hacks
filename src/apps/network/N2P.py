@@ -293,7 +293,7 @@ class ResolvingConnector(object):
                 try:
                     self.__n2pServerAddr = PlaygroundAddress.FromString(self.__n2pServerAddr)
                 except:
-                    Timer.callLater(self.__trueConnectD.errback(Exception("Could not connect to resolver. Bad address %s" % self.__n2pServerAddr)))
+                    Timer.callLater(.1, lambda: self.__trueConnectD.errback(Exception("Could not connect to resolver. Bad address %s" % self.__n2pServerAddr)))
                     return self.__trueConnectD
             srcport, self.__resolver = self.__clientBase.connect(N2PClient(), 
                                                  self.__n2pServerAddr, N2PServer.DEFAULT_SERVING_PORT,
