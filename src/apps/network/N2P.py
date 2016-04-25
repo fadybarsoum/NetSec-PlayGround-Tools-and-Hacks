@@ -282,28 +282,46 @@ class ResolvingConnector(object):
         
     def connect(self, factory, name, port, connectionType="RAW"):
         name = str(name) # force to a string in case we're accidentally given an addr
-        srcport, self.__resolver = self.__clientBase.connect(N2PClient(), 
-                                             self.__n2pServerAddr, N2PServer.DEFAULT_SERVING_PORT,
-                                             "SECURE_STREAM")
-        trueConnectD = defer.Deferred()
-        trueConnect = lambda address: trueConnectD.callback(self.__clientBase.connect(factory, address, port, connectionType))
-        d = self.__resolver.waitForConnection()
-        d.addCallback(lambda result: self.__resolverConnected(name, trueConnect))
-        d.addErrback(trueConnectD.errback)
-        self.__trueConnectD = trueConnectD
-        return trueConnectD
+        try:
+            pAddr = PlaygroundAddress.FromString(name)
+        except:
+            pAddr = None
+        self.__trueConnectD = defer.Deferred()
+        trueConnect = lambda address: self.__trueConnectD.callback(self.__clientBase.connect(factory, address, port, connectionType))
+        if not pAddr:
+            srcport, self.__resolver = self.__clientBase.connect(N2PClient(), 
+                                                 self.__n2pServerAddr, N2PServer.DEFAULT_SERVING_PORT,
+                                                 "SECURE_STREAM")
+            d = self.__resolver.waitForConnection()
+            d.addCallback(lambda result: self.__resolverConnected(name, trueConnect))
+            d.addErrback(self.__resolverConnectFailed)
+        else:
+            Timer.callLater(.1,lambda: self.__trueConnectD.callback(name))       
+        return self.__trueConnectD
         
     def __resolverConnected(self, nameToResolve, trueConnect):
         d = self.__resolver.get(nameToResolve)
         d.addCallback(lambda result: self.__resolverFinished(nameToResolve, result[0], result[1], trueConnect))
-        d.addErrback(self.__trueConnectD.errback)
+        d.addErrback(self.__resolverFinishFailure)
+        
+    def __resolverConnectFailed(self, failure):
+        if self.__resolver.transport:
+            self.__resolver.transport.loseConnection()
+        return self.__trueConnectD.errback(failure)
         
     def __resolverFinished(self, name, address, authoritative, trueConnect):
         if not address:
             raise Exception("Could not resolve '%s'" % name)
         if not authoritative and self.__requireAuthoritative:
             raise Exception("Could not resolve '%s' authoritatively" % name)
+        if self.__resolver.transport:
+            self.__resolver.transport.loseConnection()
         trueConnect(PlaygroundAddress.FromString(address))
+        
+    def __resolverFinishFailure(self, failure):
+        if self.__resolver.transport:
+            self.__resolver.transport.loseConnection()
+        return self.__trueConnectD.errback(failure)
         
 class N2PClientCLI(CLIShell):
     def __init__(self, n2pClient):
@@ -343,6 +361,9 @@ class N2PClientCLI(CLIShell):
         self.transport.write("Got error: %s\n"%e)
         Timer.callLater(.1,self.shutdown)
         return Failure
+    
+    def quit(self, *args, **kargs):
+        self.shutdown()
     
     def shutdown(self):
         try:

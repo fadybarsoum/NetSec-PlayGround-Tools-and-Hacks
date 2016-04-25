@@ -19,6 +19,7 @@ from playground.network.common import Timer
 from CipherUtil import SHA, X509Certificate, RSA, PKCS1_v1_5
 from Exchange import BitPoint
 
+from playground import configData
 from playground.playgroundlog import logging, LoggingContext
 from playground.config import LoadOptions
 from playground.error import ErrorHandler
@@ -29,6 +30,7 @@ logger = logging.getLogger(__file__)
 
 from BankCore import Ledger, LedgerLine
 from contextlib import closing
+from apps.network.N2P import ResolvingConnector
 
 from twisted.internet import defer
 from utils.ui import CLIShell, stdio
@@ -38,6 +40,8 @@ RANDOM_u64 = lambda: random.randint(0,(2**64)-1)
 PasswordHash = lambda pw: SHA.new(pw).digest()
 
 BANK_FIXED_PLAYGROUND_PORT = 700
+
+g_ResolverAddr = configData.get("network.n2p.resolver_address","")
 
 class SafeRotatingFileStream(object):
     def __init__(self, basename):
@@ -1401,11 +1405,19 @@ class AdminBankCLIClient(CLIShell, ErrorHandler):
 
     def connectionMade(self):
         try:
-            srcPort, self.__bankClient = self.__clientBase.connect(self.__bankClientFactory, 
+            connector = ResolvingConnector(self.__clientBase, g_ResolverAddr, requireAuthoritative=True)
+            d = connector.connect(self.__bankClientFactory, 
                                                           self.__bankAddr,
                                                           BANK_FIXED_PLAYGROUND_PORT,
                                                           self.__connectionType)
-                                                          
+            d.addCallback(self.__bankConnected)
+        except Exception, e:
+            print e
+            self.transport.loseConnection()
+    
+    def __bankConnected(self, result):
+        try:
+            srcPort, self.__bankClient = result                                                        
             self.__bankClient.setLocalErrorHandler(self)
             self.__d = self.__bankClient.waitForConnection()#self.__bankClient.loginToServer()
             self.__bankClient.waitForTermination().addCallback(lambda *args: self.quit())
