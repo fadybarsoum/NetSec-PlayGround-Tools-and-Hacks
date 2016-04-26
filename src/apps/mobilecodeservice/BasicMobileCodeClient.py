@@ -1068,7 +1068,7 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
                                                               BANK_FIXED_PLAYGROUND_PORT,
                                                               connectionType=self.__bankConnectionType)
         d.addCallback(lambda result: self.__bankAddrResolved(addr, account, amount, memo, callback, result))
-        d.addCallback(lambda failure: self.__bankAddrResolutionFailed(addr, callback, failure))
+        d.addErrback(lambda failure: self.__bankAddrResolutionFailed(addr, callback, failure))
         
     def __bankAddrResolved(self, addr, account, amount, memo, callback, result):
         srcPort, bankProtocol = result
