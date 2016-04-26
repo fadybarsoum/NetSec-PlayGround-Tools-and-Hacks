@@ -1077,6 +1077,11 @@ class BasicMobileCodeFactory(playground.network.client.ClientApplicationServer.C
         d.addCallback(lambda result: self.__startLogin(bankProtocol, addr, account, amount, memo, callback))
         d.addErrback(lambda failure: self.__loginFailed(bankProtocol, addr, callback, failure))
         
+    def __bankAddrResolutionFailed(self, addr, callback, failure):
+        logger.error("Address resolution failed: %s" % failure)
+        callback(None, None)
+        return failure
+        
     def __startLogin(self, bankProtocol, addr, account, amount, memo, callback):
         d = bankProtocol.loginToServer()
         d.addCallback(lambda msgObj: self.__loginComplete(bankProtocol, addr, account, amount, memo, callback))
