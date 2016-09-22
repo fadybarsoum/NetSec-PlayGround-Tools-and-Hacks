@@ -1,8 +1,10 @@
-from RegisterClient        import CURRENT_VERSION as RegisterClient
-from UnregisterClient      import CURRENT_VERSION as UnregisterClient
-from ClientRegistered      import CURRENT_VERSION as ClientRegistered 
-from ClientUnregistered    import CURRENT_VERSION as ClientUnregistered
-from ClientToClientMessage import CURRENT_VERSION as ClientToClientMessage
+from playground.network.message.definitions.playground.base.RegisterGate        import CURRENT_VERSION as RegisterGate
+from playground.network.message.definitions.playground.base.UnregisterGate      import CURRENT_VERSION as UnregisterGate
+from playground.network.message.definitions.playground.base.GateRegistered      import CURRENT_VERSION as GateRegistered 
+from playground.network.message.definitions.playground.base.GateUnregistered    import CURRENT_VERSION as GateUnregistered
+from playground.network.message.definitions.playground.base.Gate2GateMessage    import CURRENT_VERSION as Gate2GateMessage
+from playground.network.message.definitions.playground.base.Gate2GateReservation import CURRENT_VERSION as Gate2GateReservation
+from playground.network.message.definitions.playground.base.Gate2GateResponse   import CURRENT_VERSION as Gate2GateResponse
 from RunMobileCode         import CURRENT_VERSION as RunMobileCode
 from MobileCodeResult      import CURRENT_VERSION as MobileCodeResult
 from GetPeers              import CURRENT_VERSION as GetPeers

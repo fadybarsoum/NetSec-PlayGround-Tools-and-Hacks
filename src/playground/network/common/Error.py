@@ -21,6 +21,5 @@ class DuplicateClientMessageHandler(PlaygroundNetworkError):
         
 class NoSuchMessageHandler(PlaygroundNetworkError):
     def __init__(self, msg):
-        pgId = msg.topLevelData()[0]
-        Exception.__init__(self, "Could not find a message handler for type %s" % pgId)
+        Exception.__init__(self, "Could not find a message handler for %s" % msg)
         self.msg = msg

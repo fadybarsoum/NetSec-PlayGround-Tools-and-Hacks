@@ -59,7 +59,9 @@ class ProtoFieldValue(object):
     with a lambda or some similar pattern. 
     """
     
-    UNSET = object()
+    class UNSET_t(object):
+        def __repr__(self): return "UNSET MESSAGE VALUE"
+    UNSET = UNSET_t()
     
     def __init__(self):
         self._data = self.UNSET
@@ -147,7 +149,7 @@ class BasicFieldValue(ProtoFieldValue):
         try:
             struct.pack(self.__code, newValue)
         except struct.error, e:
-            raise InvalidData("Terminal does not have appropriate type of data")
+            raise InvalidData("Terminal %s does not have appropriate type of data")
         self._data = newValue
         
     def serialize(self):
@@ -414,6 +416,15 @@ class Bounded(ProtoFieldValidator):
         if fieldValue.data() == fieldValue.UNSET: return Validated()
         if (self.min != None and fieldValue.data() < self.min) or (self.max != None and fieldValue.data() > self.max):
             return OutOfBounds(self.min, self.max, fieldValue.data())
+        return Validated()
+    
+class Enum(ProtoFieldValidator):
+    def __init__(self, *validValues):
+        self.validValues = validValues
+    def validate(self, fieldValue):
+        if fieldValue.data() == fieldValue.UNSET: return Validated()
+        if fieldValue.data() not in self.validValues:
+            return InvalidValue(fieldValue.data(), self.validValues)
         return Validated()
         
 class FixedSize(ProtoFieldValidator):

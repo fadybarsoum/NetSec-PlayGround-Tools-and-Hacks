@@ -4,15 +4,17 @@ Created on Nov 25, 2013
 @author: sethjn
 '''
 from playground.network.message import MessageDefinition
+from playground.error.ErrorHandler import GetErrorReporter
 from playground.error import Common
 
-from Protocol import Protocol
 from Error import DuplicateClientMessageHandler
 from playground.network.common import Error as NetworkError
 
 from playground.playgroundlog import packetTrace
 import logging
+
 logger = logging.getLogger(__name__)
+errReporter = GetErrorReporter(__name__)
 
 
 class MessageHandlerInterface(object):
@@ -62,13 +64,13 @@ class SimpleMessageHandler(MessageHandlerInterface):
         versionMajor = int(versionMajorString)
         versionMinor = int(versionMinorString)
         
-        if not self.__messageHandlers.has_key(messageType.PLAYGROUND_IDENTIFIER):
-            self.__messageHandlers[messageType.PLAYGROUND_IDENTIFIER] = {}
-        if not self.__messageHandlers[messageType.PLAYGROUND_IDENTIFIER].has_key(versionMajor):
-            self.__messageHandlers[messageType.PLAYGROUND_IDENTIFIER][versionMajor] = {}
+        if not self.__messageHandlers.has_key(messageType):
+            self.__messageHandlers[messageType] = {}
+        if not self.__messageHandlers[messageType].has_key(versionMajor):
+            self.__messageHandlers[messageType][versionMajor] = {}
         if self.__messageHandlers.has_key(versionMinor):
             raise DuplicateClientMessageHandler(messageType)
-        self.__messageHandlers[messageType.PLAYGROUND_IDENTIFIER][versionMajor][versionMinor] = handler
+        self.__messageHandlers[messageType][versionMajor][versionMinor] = handler
         
     def unregisterMessageHandler(self, messageType):
         if not issubclass(messageType, MessageDefinition):
@@ -87,12 +89,12 @@ class SimpleMessageHandler(MessageHandlerInterface):
                 del self.__messageHandlers[messageType.PLAYGROUND_IDENTIFIER]
             
     def handleMessage(self, protocol, msg):
-        pgId, version = msg.topLevelData()
+        version = msg.MESSAGE_VERSION
         versionMajorString, versionMinorString = version.split(".")
         versionMajor = int(versionMajorString)
         versionMinor = int(versionMinorString)
         
-        msgHandlerVersions = self.__messageHandlers.get(pgId, None)
+        msgHandlerVersions = self.__messageHandlers.get(msg.__class__, None)
         if not msgHandlerVersions:
             return False
         
@@ -118,29 +120,6 @@ class SimpleMessageHandler(MessageHandlerInterface):
         try:
             handler(protocol, msg)
         except Exception, e:
-            protocol.reportException(e, explicitReporter=handler)
+            errReporter.error("Handler %s failed to handle %s %s" % (handler, protocol, msg), 
+                               exception = e)
         return True
-        
-class SimpleMessageHandlingProtocol(Protocol, SimpleMessageHandler):
-    """
-    A convenience class combining a Protocol and the SimpleMessageHandler.
-    When a message is received, it is passed to the message handling routine,
-    and errors are reported in the case of exceptions or the handler
-    not found.
-    """
-    def __init__(self, factory=None, addr=None):
-        Protocol.__init__(self, factory, addr)
-        SimpleMessageHandler.__init__(self)
-        
-    def messageReceived(self, msg):
-        logger.debug("Message received for protocol %s" % self._connectionId())
-        try:
-            success = self.handleMessage(self, msg)
-            if not success:
-                self.reportException(NetworkError.NoSuchMessageHandler(msg))
-        except Exception, e:
-            self.reportException(e, explicitReporter=SimpleMessageHandlingProtocol)
-            try:
-                self.transport.loseConnection()
-            except:
-                pass

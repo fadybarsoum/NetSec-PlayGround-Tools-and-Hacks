@@ -7,7 +7,7 @@ from playground.network.common.MessageHandler import SimpleMessageHandlingProtoc
 from playground.network.common.Protocol import Protocol
 from playground.network.client.ClientApplicationServer import ClientApplicationClient
 from playground.network.message import MessageData
-from playground.network.message.definitions.playground.base import ClientToClientMessage
+from playground.network.message.definitions.playground.base import Gate2GateMessage
 from playground.network.client.ClientBase import ClientBase
 from playground.network.common.PlaygroundAddress import PlaygroundAddress
 from playground.network.client.ClientInterceptor import InterceptorFactory
@@ -30,7 +30,7 @@ class RedirectInterceptor(SimpleMessageHandlingProtocol):
         self.clientBase = clientBase
         self.rerouteAddr = PlaygroundAddress.FromString(rerouteAddr)
         self.connections = {}
-        self.registerMessageHandler(ClientToClientMessage, self.handleC2CMessage)
+        self.registerMessageHandler(Gate2GateMessage, self.handleC2CMessage)
         
     def handleC2CMessage(self, protocol, msg):
         msgObj = msg.data()
@@ -52,7 +52,7 @@ class RedirectInterceptor(SimpleMessageHandlingProtocol):
             self.connections[connKey].transport.write(msgObj.clientPacket)
             
     def rerouteResponse(self, srcAddress, srcPort, dstAddress, dstPort, buf):
-        mb = MessageData.GetMessageBuilder(ClientToClientMessage)
+        mb = MessageData.GetMessageBuilder(Gate2GateMessage)
         mb["srcAddress"].setData(srcAddress)
         mb["srcPort"].setData(srcPort)
         mb["dstAddress"].setData(dstAddress)

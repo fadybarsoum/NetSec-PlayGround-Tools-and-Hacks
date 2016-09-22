@@ -3,22 +3,26 @@ Created on Aug 20, 2013
 
 @author: sethjn
 '''
-from playground.network.common import Protocol, SimpleMessageHandler, MIBServerProtocol
-from playground.network.common import MIBServerImpl, StandardMIBProtocolAuthenticationMixin
+#from playground.network.common import Protocol, SimpleMessageHandler, MIBServerProtocol
+#from playground.network.common import MIBServerImpl, StandardMIBProtocolAuthenticationMixin
 from playground.network.common import Error as NetworkError
-from playground.network.common import PacketStorage
+from playground.network.common import SimpleMessageHandler
+from playground.network.common.Packet import PacketStorage, IterateMessages
+from playground.error import GetErrorReporter
 from playground.network.message.definitions import playground
-from playground.error import ErrorHandlingMixin
-from playground.crypto import CertificateDatabase
+#from playground.error import ErrorHandlingMixin
+#from playground.crypto import CertificateDatabase
 
-from twisted.internet.protocol import Factory
+from twisted.internet.protocol import Protocol, Factory
 from twisted.internet.endpoints import TCP4ServerEndpoint
 from twisted.internet import reactor
 
-from ServerMessageHandlers import *
+from playground.network.chaperone.ChaperoneMessageHandlers import *
 from ChaperoneInterceptHandler import encapsulatedMessageHandler, messageInterceptor, ChaperoneInterceptHandler
 
 import random, os, array, copy
+
+errReporter = GetErrorReporter(__name__)
 
 class BacklogProducer(object):
     def __init__(self):
@@ -54,44 +58,43 @@ class BacklogProducer(object):
         if not self.producing and not self.paused:
             self.resumeProducing()
 
-class PlaygroundServerProtocol(MIBServerProtocol):
+class ChaperoneProtocol(Protocol):
     '''
     The protocol class for the PLAYGROUND central server.
     '''
     def __init__(self, server):
         '''
-        Creates an instance of the PlaygroundServerProtocol class with the
+        Creates an instance of the ChaerponeProtocol class with the
         server as the argument.
         '''
-        Protocol.__init__(self)
-        MIBServerProtocol.__init__(self, server, "PlaygroundServer")
+        #Protocol.__init__(self)
+        #MIBServerProtocol.__init__(self, server, "ChaperoneServer")
         self.server = server
         self.__addressData = {}
         self.__producer = BacklogProducer()
-        #self.__packetStorage = PacketStorage()
+        self.__packetStorage = PacketStorage()
+        self.__dispatcher = SimpleMessageHandler()
         self.__interceptHandler = ChaperoneInterceptHandler()
-        self.__interceptHandler.registerMessages(self)
+        self.__interceptHandler.registerMessages(self.__dispatcher)
         
-    """def dataReceived(self, buf):
+    def dataReceived(self, buf):
         self.__packetStorage.update(buf)
-        packet = self.__packetStorage.popPacket()
-        while packet != None:
-            MIBServerProtocol.dataReceived(self, packet)
-            packet = self.__packetStorage.popPacket()"""
+        for msg in IterateMessages(self.__packetStorage):
+            self.messageReceived(msg)
         
     def messageReceived(self, message):
         """
         Handles an incoming message. The message handling is deferred to the
-        PlaygroundServer class.
+        Chaperone class.
         """
-        success = self.handleMessage(self, message)
+        success = self.__dispatcher.handleMessage(self, message)
         if not success:
             success = self.server.handleMessage(self, message)
         if not success:
-            self.server.reportException(NetworkError.NoSuchMessageHandler(message))
+            errReporter.error("Unexpected message received", exception=NetworkError.NoSuchMessageHandler(message))
             
     def connectionMade(self):
-        MIBServerProtocol.connectionMade(self)
+        #MIBServerProtocol.connectionMade(self)
         self.__producer.init(self.transport)
             
     def connectionLost(self, reason=None):
@@ -116,10 +119,10 @@ class ServerStatistics(object):
     def elapsed(self):
         return time.time()-self.zeroTime
         
-class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler, 
-                       StandardMIBProtocolAuthenticationMixin, ErrorHandlingMixin):
+class Chaperone(Factory):#, MIBServerImpl, SimpleMessageHandler, 
+                       #StandardMIBProtocolAuthenticationMixin, ErrorHandlingMixin):
     """
-    The factory class for the PlaygroundServer. You can start the server using
+    The factory class for the Chaperone. You can start the server using
     the provided run() method which invokes the Twisted reactor. Or, alternatively,
     you can pass this class (which is a Twisted Factory) to the Twisted reactor
     in a customized fashion.
@@ -128,10 +131,10 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
     
     CURRENT_CONNECTIONS_MIB = ("playground.network.server","CurrentConnections")
     
-    protocol = PlaygroundServerProtocol
+    protocol = ChaperoneProtocol
     def __init__(self, ipAddress, port):
-        SimpleMessageHandler.__init__(self)
-        MIBServerImpl.__init__(self)
+        #SimpleMessageHandler.__init__(self)
+        #MIBServerImpl.__init__(self)
         #db = CertificateDatabase.GetDatabase()
         #self.loadAuthData(db.loadX509("MIBServer_signed.cert"))
         
@@ -139,34 +142,38 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
         self.__tcpPort = port
         self.__addressToConnection = {}
         self.__connectionToAddress = {}
+        self.__dispatcher = SimpleMessageHandler()
         self.setNetworkLossRate(0, 0, 0)
         self.setNetworkErrorRate(0, 0, 0)
         
-        client2ClientHandler = ClientToClientHandler(self, self.__addressToConnection)
-        client2ClientHandler.registerAdditionalHandler(messageInterceptor)
-        client2ClientHandler.registerAdditionalHandler(self.__networkErrorPacketHandler)
+        gate2GateHandler = Gate2GateHandler(self, self.__addressToConnection)
+        gate2GateHandler.registerAdditionalHandler(messageInterceptor)
+        gate2GateHandler.registerAdditionalHandler(self.__networkErrorPacketHandler)
         
         """ Register all message handlers """
-        self.registerMessageHandler(
-                                    playground.base.RegisterClient, 
-                                    RegisterClientHandler(self.__registerAddressProtocolPair))
-        self.registerMessageHandler(
-                                    playground.base.UnregisterClient,
-                                    UnregisterClientHandler(self.__unregisterAddressProtocolPair))
-        self.registerMessageHandler(
-                                    playground.base.ClientToClientMessage,
-                                    client2ClientHandler)
-        self.registerMessageHandler(
+        self.__dispatcher.registerMessageHandler(
+                                    playground.base.RegisterGate, 
+                                    RegisterGateHandler(self.__registerAddressProtocolPair))
+        self.__dispatcher.registerMessageHandler(
+                                    playground.base.UnregisterGate,
+                                    UnregisterGateHandler(self.__unregisterAddressProtocolPair))
+        self.__dispatcher.registerMessageHandler(
+                                    playground.base.Gate2GateMessage,
+                                    gate2GateHandler)
+        self.__dispatcher.registerMessageHandler(
                                     playground.base.GetPeers,
                                     GetPeersHandler(self, self.__addressToConnection))
-        self.registerMessageHandler(playground.intercept.EncapsulatedC2C, encapsulatedMessageHandler)
-        self.__loadMibs()
+        self.__dispatcher.registerMessageHandler(playground.intercept.EncapsulatedC2C, encapsulatedMessageHandler)
+        #self.__loadMibs()
         self.__resetStatistics()
+        
+    def handleMessage(self, protocol, message):
+        return self.__dispatcher.handleMessage(protocol, message)
         
     def __resetStatistics(self):
         self.__statistics = ServerStatistics()
         
-    def __loadMibs(self):
+    """def __loadMibs(self):
         MIBServerImpl.registerMIB(self, self.CURRENT_CONNECTIONS_MIB[0], self.CURRENT_CONNECTIONS_MIB[1], self.__currentConnections)
         
     def __currentConnections(self, mib, args):
@@ -175,7 +182,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
             for protocol in self.__addressToConnection[address]:
                 transport = protocol.transport
                 connections.append("%s <==> %s" % (str(address), str(transport.getPeer())))
-        return connections
+        return connections"""
         
     def __computeErrorBytes(self):
         self.__byteCounter = 0
@@ -213,7 +220,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
             if self.__connectionToAddress.has_key(protocol) and address in self.__connectionToAddress[protocol]:
                 self.__connectionToAddress[protocol].remove(address)
             else:
-                self.reportError("The protocol was associated with the address, but not the other way around!")
+                errReporter.error("The protocol was associated with the address, but not the other way around!")
             
             """ Remove the entry for the address if there are no more protocols associated with it """
             """ We don't do the same thing with protocol... the protocol remains in the table until """
@@ -287,7 +294,7 @@ class PlaygroundServer(Factory, MIBServerImpl, SimpleMessageHandler,
         return copy.copy(self.__statistics)
         
     def buildProtocol(self, address):
-        newProtocol = PlaygroundServerProtocol(self)
+        newProtocol = ChaperoneProtocol(self)
         self.__connectionToAddress[newProtocol] = set([])
         return newProtocol
     

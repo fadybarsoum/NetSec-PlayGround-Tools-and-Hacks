@@ -1,6 +1,2 @@
-from ClientBase import ClientBase
-import ClientApplicationServer
-from ClientApplicationTransport import ClientApplicationTransport, StackingTransportMixin
-from MIBClient import SimpleMIBClientProtocol, MIBServer
-
-sampleservers = ClientApplicationServer
+from Service import Service
+from ConnectionData import ConnectionData

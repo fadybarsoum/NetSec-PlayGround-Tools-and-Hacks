@@ -46,7 +46,7 @@ class ClientInterceptor(SimpleMessageHandlingProtocol, StackingTransportMixin):
         self.srcHigherProtocol = srcHigherProtocol
         self.registerMessageHandler(intercept.Challenge, self.handleChallenge)
         self.registerMessageHandler(intercept.RegistrationResult, self.handleResult)
-        self.registerMessageHandler(base.ClientToClientMessage, self.handleC2CPacket)
+        self.registerMessageHandler(base.Gate2GateMessage, self.handleC2CPacket)
         
     def connectionMade(self):
         intMsg = MessageData.GetMessageBuilder(intercept.Register)

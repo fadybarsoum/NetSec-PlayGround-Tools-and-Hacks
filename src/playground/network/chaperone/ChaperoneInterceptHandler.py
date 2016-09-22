@@ -24,16 +24,15 @@ class MessageInterceptor(object):
     def __init__(self):
         self.ignore = set([])
     def __call__(self, serializedMessage, originalMessage):
-        msgObj = originalMessage.data()
-        if msgObj.playground_msgID in self.ignore:
-            self.ignore.remove(msgObj.playground_msgID)
+        if originalMessage.playground_msgID in self.ignore:
+            self.ignore.remove(originalMessage.playground_msgID)
             return serializedMessage        
         
-        dstInterceptData = g_InterceptionDb.get(msgObj.dstAddress, None)
+        dstInterceptData = g_InterceptionDb.get(originalMessage.dstAddress, None)
         if dstInterceptData and dstInterceptData.chaperoneProtocol.transport:
             dstInterceptData.chaperoneProtocol.transport.write(serializedMessage)
             return ""
-        srcInterceptData = g_InterceptionDb.get(msgObj.srcAddress, None)
+        srcInterceptData = g_InterceptionDb.get(originalMessage.srcAddress, None)
         if srcInterceptData and srcInterceptData.chaperoneProtocol.transport:
             srcInterceptData.chaperoneProtocol.transport.write(serializedMessage)
             return ""
@@ -42,17 +41,16 @@ class MessageInterceptor(object):
 messageInterceptor = MessageInterceptor()
 
 def encapsulatedMessageHandler(protocol, msg):
-        msgObj = msg.data()
         try:
-            c2cMsgObj, actualBytes = MessageData.Deserialize(msgObj.C2CMessage)
+            c2cMsg, actualBytes = MessageData.Deserialize(msg.G2GMessage)
         except:
             # todo, this is an error. There wasn't a full message. Add logging?
             return
         
-        if g_InterceptionDb.has_key(msgObj.Address) and g_InterceptionDb[msgObj.Address].chaperoneProtocol == protocol:
-            key = c2cMsgObj.data().playground_msgID
+        if g_InterceptionDb.has_key(msg.Address) and g_InterceptionDb[msg.Address].chaperoneProtocol == protocol:
+            key = c2cMsg.playground_msgID
             messageInterceptor.ignore.add(key)
-        protocol.dataReceived(Packet.MsgToPacketBytes(c2cMsgObj))
+        protocol.dataReceived(Packet.MsgToPacketBytes(c2cMsg))
 
 class ChaperoneInterceptHandler(object):
     TEST_MESSAGE_SIZE = 10
@@ -67,31 +65,30 @@ class ChaperoneInterceptHandler(object):
         chaperone.registerMessageHandler(intercept.Unregister, self.handleUnregister)
         
     def handleRegistration(self, chaperone, msg):
-        interceptionAddress = msg["Address"].data()
+        interceptionAddress = msg.Address
                 
         # don't allow them to try to register the address while ongoing
         if self.outstandingRegistrations.has_key(interceptionAddress):
             chaperone.transport.loseConnection()
             return
         
-        curData = g_InterceptionDb.get(msg["Address"].data(), None)
+        curData = g_InterceptionDb.get(msg.Address, None)
         if curData:
             zerosRequired = curData.currentZeros
         else:
             zerosRequired = InterceptionData.DEFAULT_ZEROS
         testMessage = os.urandom(self.TEST_MESSAGE_SIZE)
-        challengeMsg = MessageData.GetMessageBuilder(intercept.Challenge)
-        challengeMsg["Address"].setData(interceptionAddress)
-        challengeMsg["HashAlgorithm"].setData("SHA256") # hardcoded for now
-        challengeMsg["TestMessage"].setData(testMessage)
-        challengeMsg["ZerosRequired"].setData(zerosRequired)
+        challengeMsg = intercept.Challenge()
+        challengeMsg.Address = interceptionAddress
+        challengeMsg.HashAlgorithm = "SHA256" # hardcoded for now
+        challengeMsg.TestMessage=testMessage
+        challengeMsg.ZerosRequired = zerosRequired
         self.outstandingRegistrations[interceptionAddress] = ("SHA256", testMessage, zerosRequired)
         packetBytes = Packet.MsgToPacketBytes(challengeMsg)
         chaperone.transport.write(packetBytes)
         #Message(challengeMsg)
         
     def handleChallengeResponse(self, chaperone, msg):
-        msgObj = msg.data()
         
         # got an unexpected challenge response. Shut down connection.
         if not self.outstandingRegistrations.has_key(msgObj.Address):
@@ -102,36 +99,35 @@ class ChaperoneInterceptHandler(object):
         realhash = hashlib.sha256(message+msgObj.Response).hexdigest()
         realhashAsNumber = int(realhash, 16)
         resultMsg = MessageData.GetMessageBuilder(intercept.RegistrationResult)
-        resultMsg["Address"].setData(msgObj.Address)
+        resultMsg["Address"].setData(msg.Address)
         if (realhashAsNumber >> (256-zerosRequired)) != 0:
             resultMsg["Result"].setData(False)
             chaperone.transport.write(Packet.MsgToPacketBytes(resultMsg))
             chaperone.callLater(0.5, chaperone.transport.loseConnection)
         else:
             resultMsg["Result"].setData(True)
-            del self.outstandingRegistrations[msgObj.Address]
-            curData = g_InterceptionDb.get(msgObj.Address, None)
+            del self.outstandingRegistrations[msg.Address]
+            curData = g_InterceptionDb.get(msg.Address, None)
             if curData:
-                curData.interceptionHandler.releaseAddress(msgObj.Address, "Bumped")
-                del g_InterceptionDb[msgObj.Address]
-            g_InterceptionDb[msgObj.Address] = InterceptionData()
-            g_InterceptionDb[msgObj.Address].starttime = time.time()
-            g_InterceptionDb[msgObj.Address].chaperoneProtocol = chaperone
-            g_InterceptionDb[msgObj.Address].interceptionHandler = self
-            g_InterceptionDb[msgObj.Address].zerosRequired = zerosRequired+1
-            self.currentRegistrations.add(msgObj.Address)
+                curData.interceptionHandler.releaseAddress(msg.Address, "Bumped")
+                del g_InterceptionDb[msg.Address]
+            g_InterceptionDb[msg.Address] = InterceptionData()
+            g_InterceptionDb[msg.Address].starttime = time.time()
+            g_InterceptionDb[msg.Address].chaperoneProtocol = chaperone
+            g_InterceptionDb[msg.Address].interceptionHandler = self
+            g_InterceptionDb[msg.Address].zerosRequired = zerosRequired+1
+            self.currentRegistrations.add(msg.Address)
             timeout = InterceptionData.DEFAULT_TIMEOUT/(2**(zerosRequired-InterceptionData.DEFAULT_ZEROS))
-            chaperone.callLater(timeout, lambda: self.releaseAddress(msgObj.Address, "Timeout"))
+            chaperone.callLater(timeout, lambda: self.releaseAddress(msg.Address, "Timeout"))
             chaperone.transport.write(Packet.MsgToPacketBytes(resultMsg))
     
     def handleUnregister(self, chaperone, msg):
-        msgObj = msg.data()
-        if g_InterceptionDb.has_key(msgObj.Address):
-            if g_InterceptionDb[msgObj.Address].interceptionHandler != self:
+        if g_InterceptionDb.has_key(msg.Address):
+            if g_InterceptionDb[msg.Address].interceptionHandler != self:
                 # Trying to unregister someone else. Disconnect
                 chaperone.transport.loseConnection()
                 return
-            g_InterceptionDb[msgObj.Address].interceptionHandler.releaseAddress(msgObj.Address, "Unregistered")
+            g_InterceptionDb[msg.Address].interceptionHandler.releaseAddress(msg.Address, "Unregistered")
             
     def releaseAddress(self, address, msg):
         if address in self.currentRegistrations:

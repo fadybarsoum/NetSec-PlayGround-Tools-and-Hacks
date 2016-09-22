@@ -146,8 +146,21 @@ class StructuredData(ProtoFieldValue):
         """
         pass
     
-    @staticmethod
-    def GetMessageBuilder(key, version=MessageDefinitionMetaClass.MOST_RECENT):
+    @classmethod
+    def GetMessageDefinition(cls, key, version=MessageDefinitionMetaClass.MOST_RECENT):
+        if type(key) == MessageDefinitionMetaClass and version==MessageDefinitionMetaClass.MOST_RECENT:
+            mDef = key
+        else:
+            if type(key) == MessageDefinitionMetaClass:
+                key = key.PLAYGROUND_IDENTIFIER
+            mDef = MessageDefinitionMetaClass.GetMessageDefinition(key, version)
+            if not mDef and version != MessageDefinitionMetaClass.MOST_RECENT:
+                mDef = MessageDefinitionMetaClass.GetMessageDefinition(key, version, allowNewerMinorVersion=True) 
+        
+        return mDef
+    
+    @classmethod
+    def GetMessageBuilder(cls, key, version=MessageDefinitionMetaClass.MOST_RECENT):
         """
         Given a dotted key, get the appropriate StructuredData parameterized
         with the correct builder definition. As this is a "top level" message
@@ -156,18 +169,9 @@ class StructuredData(ProtoFieldValue):
         If the specified version is not available, a search will be made
         for a newer minor version.
         """
-        
-        if type(key) == MessageDefinitionMetaClass and version==MessageDefinitionMetaClass.MOST_RECENT:
-            builder = StructuredData(key)
-        else:
-            if type(key) == MessageDefinitionMetaClass:
-                key = key.PLAYGROUND_IDENTIFIER
-            builderDef = MessageDefinitionMetaClass.GetMessageDefinition(key, version)
-            if not builderDef and version != MessageDefinitionMetaClass.MOST_RECENT:
-                builderDef = MessageDefinitionMetaClass.GetMessageDefinition(key, version, allowNewerMinorVersion=True) 
-            if not builderDef: return None
-            builder = StructuredData(builderDef)
-        
+        mDef = cls.GetMessageDefinition(key, version)
+        if not mDef: return None 
+        builder = StructuredData(mDef)
         builder.init()
         return builder
     
@@ -198,7 +202,9 @@ class StructuredData(ProtoFieldValue):
             versionMajorStr, versionMinorStr = version.split(".")
             versionTuple = (int(versionMajorStr), int(versionMinorStr))
             
-            msgHandler = StructuredData.GetMessageBuilder(name, versionTuple)
+            msgType = StructuredData.GetMessageDefinition(name, versionTuple)
+            msg = msgType()
+            msgHandler = msg.__builder__
             if not msgHandler: 
                 yield None
             else:
@@ -206,7 +212,7 @@ class StructuredData(ProtoFieldValue):
                 streamIterator = msgHandler.deserializeStream(bufs)
                 while streamIterator.next() == None:
                     yield None
-                yield msgHandler
+                yield msg
         except Exception, e:
             msg = "Deserialization failed: %s\n" % e
             msg += traceback.format_exc()
@@ -227,11 +233,13 @@ class StructuredData(ProtoFieldValue):
         versionMajorStr, versionMinorStr = version.split(".")
         versionTuple = (int(versionMajorStr), int(versionMinorStr))
         
-        msgHandler = StructuredData.GetMessageBuilder(name, versionTuple)
+        msgType = StructuredData.GetMessageDefinition(name, versionTuple)
+        msg = msgType()
+        msgHandler = msg.__builder__
         if not msgHandler: 
             return (None, 0)
         actualBytes = msgHandler.deserialize(buf, offset)+offset
-        return (msgHandler, actualBytes)
+        return (msg, actualBytes)
     
     def __init__(self, defClass):
         ProtoFieldValue.__init__(self)
@@ -404,10 +412,51 @@ class MessageDefinition(object):
     definition:
       (NAME, TYPE, *ATTRIBUTES)
     """
+    
+    @classmethod
+    def Deserialize(cls, buf):
+        obj, bytesUsed = StructuredData.Deserialize(buf)
+        if cls != MessageDefinition and cls != obj.__class__:
+            raise UnexpectedMessageError("Expected to deserialized %s but got %s" % (cls, obj.__class__))
+        return obj, bytesUsed
+    
+    @staticmethod
+    def DeserializeStream(bufs):
+        for obj in StructuredData.DeserializeStream(bufs):
+            yield obj
+    
     __metaclass__ = MessageDefinitionMetaClass
     PLAYGROUND_IDENTIFIER = "base.definition"
     MESSAGE_VERSION = "0.0"
     BODY = []
+    
+    UNSET = ProtoFieldValue.UNSET
+    
+    def __init__(self, **fieldInitialization):
+        self.__builder__ = StructuredData(self.__class__)
+        self.__builder__.init()
+        self.__fieldNames = set([])
+        for fieldSpec in self.BODY:
+            fieldName = fieldSpec[0]
+            self.__fieldNames.add(fieldName)
+            if fieldInitialization.has_key(fieldName):
+                self.__builder__[fieldName].setData(fieldInitialization[fieldName])
+            
+    def __getattribute__(self, field):
+        if not field.startswith("_") and field in self.__fieldNames:
+            return self.__builder__[field].data()
+        return object.__getattribute__(self, field)
+    
+    def __setattr__(self, field, value):
+        if not field.startswith("_") and field in self.__fieldNames:
+            self.__builder__[field].setData(value)
+        else: object.__setattr__(self, field, value)
+        
+    def __serialize__(self):
+        return self.__builder__.serialize()
+    
+    def __repr__(self):
+        return "%s v%s (%x)" % (self.PLAYGROUND_IDENTIFIER, self.MESSAGE_VERSION, id(self))
 
 """
 This needs moved to a utility class/module

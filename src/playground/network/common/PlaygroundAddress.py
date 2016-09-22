@@ -43,6 +43,8 @@ class PlaygroundAddress(object):
                     self.__group == other.__group and
                     self.__individual == other.__individual and
                     self.__index == other.__index)
+        elif isinstance(str):
+            return self.__addressString == other
         return False
     
     def __ne__(self, other):

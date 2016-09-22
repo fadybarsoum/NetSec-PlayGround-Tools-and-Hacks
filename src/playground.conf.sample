@@ -62,7 +62,7 @@
      class: logging.handlers.TimedRotatingFileHandler
      when: midnight
      delay: True
-     level: INFO
+     level: DEBUG
      formatter: simple
      filename: %(playgroundlog.logdir)s/playground.%(playgroundlog.nodeid)s.info.log
      encoding: utf8
@@ -72,7 +72,7 @@
      class: logging.handlers.TimedRotatingFileHandler
      when: midnight
      delay: True
-     level: ERROR
+     level: DEBUG
      formatter: simple
      filename: %(playgroundlog.logdir)s/playground.%(playgroundlog.nodeid)s.errors.log
      encoding: utf8
@@ -80,20 +80,20 @@
     # end handlers
 
 ====root====
-    level: ERROR
+    level: DEBUG
     handlers: info_file_handler, error_file_handler
     # end root
 
 ### end default_config ###
 
 ==network==
-===client===
-====ClientBase====
-=====connection_types=====
+===gate===
+====ConnectionData====
+    default: YOUR_KEY_NAME_HERE
+=====YOUR_KEY_NAME_HERE=====
+     chaperone_IPaddr:  IPADDRESS OF CHAPERONE
+     chaperone_TCPport: 9090
+     gate_TCPport:      TCP PORT FOR GATE TO LISTEN
+     playground_addr:   REQUESTED PLAYGROUND ADDRESS
 
-     list = RAW
-      
-======RAW======
-      client = None
-      server = None
 

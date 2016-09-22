@@ -6,32 +6,161 @@ Created on Nov 22, 2013
 
 import logging
 import inspect
+import traceback
 import sys
 
-from twisted.internet import reactor
+from Common import PlaygroundError
+
+class InvalidErrorLevel(PlaygroundError):
+    def __init__(self):
+        Exception.__init__(self, "Level must be a tuple(uint, str)")
+        
+class DuplicateErrorLevelValue(PlaygroundError):
+    def __init__(self, value):
+        Exception.__init__(self, "Attempt to create an error level with the same value %d" % value)
+        
+class DuplicateErrorLevelName(PlaygroundError):
+    def __init__(self, name):
+        Exception.__init__(self, "Attempt to create an error level with the same name %s" % name)
+        
+class InvalidReporterName(PlaygroundError):
+    def __init__(self):
+        Exception.__init__(self, "Reporter names must be of the form x.y.z or just x")
+        
+class ErrorLevel(object):
+    ValueMapping = {}
+    NameMapping = {}
+    
+    def __init__(self, value, name):
+        if self.ValueMapping.has_key(value):
+            raise DuplicateErrorLevelValue(value)
+        if self.NameMapping.has_key(name):
+            raise DuplicateErrorLevelName(name)
+        self.__value = value
+        self.__name = name
+        self.ValueMapping[value] = name
+        self.NameMapping[name] = value
+        
+    def name(self): return self.__name
+    def value(self): return self.__value
+    def __str__(self): return self.__name
+    def __int__(self): return self.__value
+    def __cmp__(self, other): return self.__value - other.value()
+    def __hash__(self): return hash(self.__value)
+    
+ErrorLevel.LEVEL_WARNING = ErrorLevel(0, "Warning")
+ErrorLevel.LEVEL_REGULAR = ErrorLevel(1000, "Regular")
+ErrorLevel.LEVEL_FATAL   = ErrorLevel(2000, "Fatal")
+    
+ErrorLevel.STANDARD_LEVELS = [ErrorLevel.LEVEL_WARNING, ErrorLevel.LEVEL_REGULAR, ErrorLevel.LEVEL_FATAL]
+
+
+class ErrorReporter(object):
+    def __init__(self, name, parent=None):
+        self.__name = name
+        self.__parent = parent
+        self.__children = {}
+        self.__handlers = {}
+        self.__reportingLevels = []
+        self.__propegate = False
+        
+    def localName(self): return self.__name
+    
+    def name(self): return self.__parent and (self.__parent.name() + self.__name) or self.__name
+    
+    def propegate(self): return self.__propegate
+    
+    def setPropegation(self, onOff): self.__propegate = onOff
+        
+    def report(self, level, message, exception=None, stackOffset=0, explicitFrame=None):
+        handled = False
+        if explicitFrame:
+            callerFrame = explicitFrame
+        else:
+            callerFrame = inspect.stack()[1+stackOffset] # 0 represents this function
+                                            # 1 represents line at reporter
+                                            # 2 represents the caller unless we were called from handleException
+                                            # 3 represents the caller if there's an intermediate call from handleException
+                                            # If other layers get inbetween the call to reportError, they should
+                                            #   increase the stackHack
+            callerFrame = callerFrame[0] # Get just the frame, not any of the line info
+        for repLevel in self.__reportingLevels:
+            if repLevel <= level:
+                self.__handlers[repLevel].handle(self.name(), level, message, exception, callerFrame)
+                handled = True
+            else: break 
+        if (self.__propegate or not handled) and self.__parent:
+            self.__parent.report(level, message, exception, stackOffset+1, explicitFrame)
+        
+    
+    def warning(self, message, exception=None, stackOffset=0, explicitFrame=None):
+        self.report(ErrorLevel.LEVEL_WARNING, message, exception, stackOffset + 1, explicitFrame)
+    
+    def error(self, message, exception=None, stackOffset=0, explicitFrame=None):
+        self.report(ErrorLevel.LEVEL_REGULAR, message, exception, stackOffset + 1, explicitFrame)
+    
+    def fatal(self, message, exception=None, stackOffset=0, explicitFrame=None):
+        self.report(ErrorLevel.LEVEL_FATAL, message, exception, stackOffset + 1, explicitFrame)
+        
+    def setHandler(self, level, handler):
+        self.__handlers[level] = handler
+        if level not in self.__reportingLevels:
+            self.__reportingLevels.append(level)
+            self.__reportingLevels.sort()
+            
+    def removeHandler(self, level):
+        if self.__handlers.has_key(level):
+            del self.__handlers[level]
+            self.__reportingLevels.remove(level)
+            return True
+        return False
+    
+    def clearHandlers(self):
+        self.__handlers = {}
+        self.__reportingLevels = []
+    
+    def getErrorReporter(self, name):
+        if not name:
+            raise InvalidReporterName()
+        splitter = name.find(".")
+        if splitter < 0:
+            childName = name
+            remainder = ""
+        elif splitter == 0:
+            raise InvalidReporterName()
+        else:
+            childName = name[:splitter]
+            remainder = name[(splitter+1):]
+            if not remainder:
+                raise InvalidReporterName()
+        if not self.__children.has_key(childName):
+            self.__children[childName] = ErrorReporter(childName, self)
+            
+        if not remainder:
+            return self.__children[childName]
+        else:
+            return self.__children[childName].getErrorReporter(remainder)
+
+g_ROOT_ERROR_HANDLER = ErrorReporter("")
+def GetErrorReporter(name): 
+    return name == "" and g_ROOT_ERROR_HANDLER or g_ROOT_ERROR_HANDLER.getErrorReporter(name)
+    
 
 class ErrorHandler(object):
     '''
-    Interface class for all error handling mechanisms. Any
-    error handling mechanisms must have the capacity to handle
-    error messages and error exceptions.
-    
-    Error handling can take many forms. The default mechanism
-    simply logs to the global logger (LoggingErrorHandler). However,
-    other mechanisms can be inserted that scan errors for specific
-    problems and take appropriate action.
+    Interface class for all error handling mechanisms. 
     '''
 
-    def __init__(self):
+    def __init__(self, handlerName=None):
         '''
         Constructor
         '''
-        pass
+        self.__name = handlerName and handlerName or "<Unnamed Handler %s>" % str(self)
+        
+    def name(self):
+        return self.__name
     
-    def handleError(self, message, reporter=None, stackHack=0):
-        pass
-    
-    def handleException(self, e, reporter=None, stackHack=0, fatal=0):
+    def handle(self, reporterName, errorLevel, errorMessage, exception=None, stackFrame=None):
         pass
     
 class LoggingErrorHandler(ErrorHandler):
@@ -39,91 +168,58 @@ class LoggingErrorHandler(ErrorHandler):
     The LoggingErrorHandler is the default error handler for PLAYGROUND.
     When an error is logged (either as a message or an exception), it is 
     simply logged using the global python logger.
-    
-    If the logger has no handlers, error messages are simply dropped. Exceptions
-    are re-raised if there are no handlers or the exceptions are marked as 
-    fatal.
     """
-    def __init__(self, logger):
-        self.logger = logger
+
+    def __init__(self):
+        ErrorHandler.__init__(self, handlerName="Default Logging Error Handler")
         
-    def __loggerReady(self):
-        if not self.logger: return False
-        if not self.logger.handlers: return False
-        return True
+    def handle(self, reporterName, errorLevel, errorMessage, exception=None, stackFrame=None):
+        errMsg = "[ERROR(%s) " % errorLevel
         
-    def handleError(self, message, reporter=None, stackHack=0):
-        callerframerecord = inspect.stack()[2+stackHack]    
-                                            # 0 represents this function
-                                            # 1 represents line at reporter
-                                            # 2 represents the caller unless we were called from handleException
-                                            # 3 represents the caller if there's an intermediate call from handleException
-                                            # If other layers get inbetween the call to reportError, they should
-                                            #   increase the stackHack
-        frame = callerframerecord[0]
-        info = inspect.getframeinfo(frame)
-        objId = reporter and str(id(reporter)) or "(None)"
-        errMsg = "[Error at %s::%s::%d (obj id: %s)] %s" % (info.filename, info.function, info.lineno, objId, message)
-        if self.__loggerReady():
-            self.logger.error(errMsg)
-        
-    def handleException(self, e, reporter=None, stackHack=0, fatal=False):
-        if fatal:
-            reactor.callLater(.1, reactor.stop)
-        if self.__loggerReady():
-            try:
-                str(e).decode('ascii','strict')
-            except UnicodeDecodeError, u_e:
-                e = Exception("Could not report original error because it has encoding problems: %s" % str(str(e).decode("ascii","ignore")))
-            if reporter: self.handleError("Exception: %s" % str(e), reporter=reporter, stackHack=(stackHack+1))
-            self.logger.exception(e)
-            if fatal:
-                raise Exception, "Logging Error Handler received fatal exception, re-raising:\n%s"%e, sys.exc_info()[2]
+        if stackFrame:
+            info = inspect.getframeinfo(stackFrame)
+            if stackFrame.f_locals.has_key("self"):
+                function = "%s.%s" % (stackFrame.f_locals["self"].__class__, info.function)
+            else:
+                function = info.function
+            errMsg += "%s::%d -> " % (function, info.lineno)
         else:
-            raise Exception, "Logging Error Handler not ready, re-raising exception:\n%s"%e, sys.exc_info()[2]
+            errMsg += "reported by "
+        errMsg += "%s/%s ]\n[DETAILS]\n" % (reporterName and reporterName or "ROOT", self.name())
+        errMsg += errorMessage
         
+        if exception and not stackFrame:
+            errMsg += "\n\tAssociated Error %s" % exception
+        if stackFrame:
+            errMsg += "\n\tAssociated Trace: %s" % "".join(traceback.format_stack(stackFrame)) 
         
-class ErrorHandlingMixin(object):
-    """
-    The ErrorHandlingMixin is a class that can be easily inherited
-    by a Python class to allow simple in-class error handling for non-
-    abortive problems. The error messages and/or exceptions are simply
-    reported to the API and the API handles the details.
-    
-    A global error handler is set that is the default handler. However,
-    Individual classes can have specific error handlers set if necessary.
-    
-    So, for example, a mobile-code handling class might want a more
-    investigative error handler while the default logging handler is
-    appropriate for everything else.
-    
-    The mixin only reports to one handler: the class handler if it exists,
-    and the global handler otherwise. If the local object should report to
-    both the local and global error handler, the object-specific handler
-    should chain to the global handler.
-    """
-    g_ErrorHandler = LoggingErrorHandler(logging.getLogger(""))
-    l_ErrorHandler = g_ErrorHandler
-    
-    @staticmethod
-    def SetGlobalErrorHandler(handler):
-        ErrorHandlingMixin.g_ErrorHandler = handler
-    
-    def setLocalErrorHandler(self, handler):
-        """
-        Set the object to use a local handler rather than the global
-        one. If handler is none, this object is reset to use the global
-        handler.
-        """
-        if handler:
-            self.l_ErrorHandler = handler
+        errMsg = errMsg.decode('ascii', 'replace') + "\n"  
+        
+        logger = logging.getLogger(reporterName)
+        if errorLevel == ErrorLevel.LEVEL_WARNING:
+            logger.warning(errMsg)
+        elif errorLevel == ErrorLevel.LEVEL_REGULAR or errorLevel < ErrorLevel.LEVEL_FATAL:
+            logger.error(errMsg)
         else:
-            self.l_ErrorHandler = self.g_ErrorHandler
+            logger.critical(errMsg)
+            
+class SimpleDebugErrorHandler(ErrorHandler):
+    """
+    This handler is useful in debugging. When used, all exceptions
+    above warning are re-raised so that they show up on std out.
+    Moreover, all error reports and warnings are also printed
+    """
+    
+    def __init__(self):
+        ErrorHandler.__init__(self, handlerName="Simple Debug Error Handler")
         
-    def reportError(self, message, explicitReporter=None, stackHack=0):
-        reporter = explicitReporter and explicitReporter or self
-        self.l_ErrorHandler.handleError(message, reporter=reporter, stackHack=stackHack)
-        
-    def reportException(self, e, explicitReporter=None, stackHack=0, fatal=False):
-        reporter = explicitReporter and explicitReporter or self
-        self.l_ErrorHandler.handleException(e, reporter=reporter, stackHack=stackHack, fatal=fatal)
+    def handle(self, reporterName, errorLevel, errorMessage, exception=None, stackFrame=None):
+        print "Error reported (%s) by %s: %s" % (errorLevel, reporterName, errorMessage)
+        print "Stack trace: %s" % "".join(traceback.format_stack(stackFrame))
+        if exception and errorLevel != ErrorLevel.LEVEL_WARNING:
+            print "Re-rasing non-warning exception: "
+            print "\n\n\n",exception,"\n\n\n"
+            raise exception
+
+g_ROOT_ERROR_HANDLER.setHandler(ErrorLevel.LEVEL_WARNING, LoggingErrorHandler())       
+                

@@ -9,12 +9,12 @@ from playground.network.message.definitions import playground
 
 import time
 
-class ClientToClientHandler(object):
+class Gate2GateHandler(object):
     """
-    The Server C2C handler passes the client message to other
-    clients registered as the receiving address.
+    The Server G2G handler passes the gate message to other
+    gates registered as the receiving address.
     
-    Registered handlers process the message before trasnsmission.
+    Registered handlers process the message before transmission.
     """
     def __init__(self, server, connectionTable):
         self.__server = server
@@ -36,41 +36,39 @@ class ClientToClientHandler(object):
         return serializedMessage
     
     def __call__(self, protocol, msg):
-        playgroundDestAddressString = msg["dstAddress"].data()
+        playgroundDestAddressString = msg.dstAddress
         
         serializedMessage = self.__formatMessage(msg)
         if len(serializedMessage) == 0: return
         
-        for client in self.__connectionTable.get(playgroundDestAddressString, []):
-            client.producerWrite(serializedMessage)
+        for gate in self.__connectionTable.get(playgroundDestAddressString, []):
+            gate.producerWrite(serializedMessage)
             
-class UnregisterClientHandler(object):
+class UnregisterGateHandler(object):
     def __init__(self, unregistrationCallback):
         self.__callback = unregistrationCallback
         
     def __call__(self, protocol, msg):
-        playgroundAddressString = msg["address"].data()
+        playgroundAddressString = msg.address
         success = self.__callback(playgroundAddressString, protocol)
         if not success:
             playgroundAddressString = ""
-        unregisterClientMsg = MessageData.GetMessageBuilder(playground.base.ClientUnregistered)
-        if unregisterClientMsg == None:
-            raise Exception("Cannot find UnregisterClient definition")
+        unregisterGateMsg = playground.base.GateUnregistered()
         
         """ Create the response packet """
-        unregisterClientMsg["success"].setData(success)
-        unregisterClientMsg["address"].setData(playgroundAddressString)
+        unregisterGateMsg.success = success
+        unregisterGateMsg.address = playgroundAddressString
         """ Packet created. """
         
-        packetBuffer = Packet.MsgToPacketBytes(unregisterClientMsg)
+        packetBuffer = Packet.MsgToPacketBytes(unregisterGateMsg)
         protocol.transport.write(packetBuffer)
 
-class RegisterClientHandler(object):
+class RegisterGateHandler(object):
     def __init__(self, registrationCallback):
         self.__callback = registrationCallback
         
     def __call__(self, protocol, msg):
-        playgroundAddressString = msg["address"].data()
+        playgroundAddressString = msg.address
         success = True
         try:
             """ Make sure the address is valid (can be converted back to an PlaygroundAddress) """
@@ -79,19 +77,17 @@ class RegisterClientHandler(object):
             success = False
         if success:
             success = self.__callback(playgroundAddressString, protocol)
-        registerClientMsg = MessageData.GetMessageBuilder(playground.base.ClientRegistered)
-        if registerClientMsg == None:
-            raise Exception("Cannot find RegisterClient definition")
+        registerGateMsg = playground.base.GateRegistered()
         
         if not success:
             playgroundAddressString = "" #TODO: should there be an "error address"?
         
         """ Create the response packet """
-        registerClientMsg["success"].setData(success)
-        registerClientMsg["address"].setData(playgroundAddressString)
+        registerGateMsg.success = success
+        registerGateMsg.address = playgroundAddressString
         """ Packet created. """
         
-        packetBuffer = Packet.MsgToPacketBytes(registerClientMsg)
+        packetBuffer = Packet.MsgToPacketBytes(registerGateMsg)
         protocol.transport.write(packetBuffer)
         
 class GetPeersHandler(object):
@@ -100,11 +96,8 @@ class GetPeersHandler(object):
         self.__connTable = connectionTable
         
     def __call__(self, protocol, msg):
-        peersMsg = MessageData.GetMessageBuilder(playground.base.Peers)
-        peersMsg["time"].setData(time.time())
-        addresses = self.__connTable.keys()
-        peersMsg["peers"].add(len(addresses))
-        for index in range(len(addresses)):
-            peersMsg["peers"][index].setData(addresses[index])
+        peersMsg = playground.base.Peers()
+        peersMsg.time = time.time()
+        peersMsg.peers = self.__connTable.keys()
         packetBuffer = Packet.MsgToPacketBytes(peersMsg)
         protocol.transport.write(packetBuffer)

@@ -22,9 +22,9 @@ def UseStdErrHandler(enable, loggerName=""):
         logger.removeHandler(g_StdErrHandler)
 
 class LoggingContext(object):
-    def __init__(self):
+    def __init__(self, name=None):
         self.logDirectory = os.path.join( os.getcwd(), "logs" )
-        self.nodeId = "unknown_"+str(random.randint(0,1024))
+        self.nodeId = name and name or "unknown_"+str(random.randint(0,1024))
         self.doPacketTracing = False
         self.logConfig = None
 

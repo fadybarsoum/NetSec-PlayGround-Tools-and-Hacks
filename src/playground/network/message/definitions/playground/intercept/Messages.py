@@ -45,7 +45,7 @@ class EncapsulatedC2C(MessageDefinition):
     MESSAGE_VERSION = "1.0"
     BODY = [
             ("Address", STRING),
-            ("C2CMessage",STRING)
+            ("G2GMessage",STRING)
             ]
 
 class Unregister(MessageDefinition):

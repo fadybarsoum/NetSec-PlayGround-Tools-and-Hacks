@@ -5,14 +5,16 @@ Created on Aug 20, 2013
 '''
 import struct
 
-from playground.error import ErrorHandlingMixin
+from playground.error import GetErrorReporter
+from playground.network.message.ProtoBuilder import MessageDefinition
 
 import logging, zlib, random
 logger = logging.getLogger(__name__)
+errReporter = GetErrorReporter(__name__)
 
 ## TODO: change static methods to class methods
 
-class Packet(ErrorHandlingMixin):
+class Packet(object):
     '''
     The Packet class is not instantiated and serves primarily as a namespace.
     It groups together the operations necessary to create "raw wire"
@@ -105,7 +107,7 @@ class Packet(ErrorHandlingMixin):
     
     @staticmethod
     def MsgToPacketFrames(msg, framingSize=(2**14)):
-        rawBuffer = msg.serialize()
+        rawBuffer = msg.__serialize__()
         frames = Packet.CreatePacketFrames(rawBuffer, framingSize)
         return frames
     
@@ -214,3 +216,23 @@ class PacketStorage(object):
             logger.debug("Unknown result code %s" % resultCode)
             #errorReporter.reportError("Unknown packet unpack result code %s" % resultCode)
         return None
+    
+def IterateMessages(packetStorage, logger=None, errReporter=None):
+    packetBytes = packetStorage.popPacket()
+    while packetBytes != None:
+        try:
+            msg, bytesConsumed = (MessageDefinition.Deserialize(packetBytes))
+        except Exception, e:
+            msg = None
+            errReporter and errReporter.error("Failed deserializing stream.", exception=e)
+            
+        # more serialized messages within the packet?
+        packetBytes = packetBytes[bytesConsumed:]
+        if not packetBytes:
+            # No? how about another packet?
+            packetBytes = packetStorage.popPacket()
+            
+        if not msg:
+            errReporter and errReporter.warning("Could not deserialize message.")
+        else:
+            yield msg

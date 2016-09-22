@@ -1,5 +1,5 @@
 '''
-Created on Oct 23, 2013
+Created on Dec 10, 2013
 
 @author: sethjn
 '''
@@ -8,9 +8,9 @@ from playground.network.message.StandardMessageSpecifiers import *
 from playground.network.message.ProtoBuilder import MessageDefinition
 from playground.network.message.definitions.Util import playgroundIdentifier
 
-class RegisterClientv1_0(MessageDefinition):
+class UnregisterGatev1_0(MessageDefinition):
     '''
-    classdocs
+    Message definition for unregistering an address for a client.
     '''
     PLAYGROUND_IDENTIFIER = playgroundIdentifier(__name__)
     MESSAGE_VERSION = "1.0"
@@ -18,4 +18,4 @@ class RegisterClientv1_0(MessageDefinition):
             ("address", STRING)
             ]
     
-CURRENT_VERSION = RegisterClientv1_0
+CURRENT_VERSION = UnregisterGatev1_0

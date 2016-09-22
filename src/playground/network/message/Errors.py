@@ -86,6 +86,16 @@ class OutOfBounds(ValidationFailure):
         self.min = min
         self.max = max
         self.value = value
+        
+class InvalidValue(ValidationFailure):
+    """
+    This failure should be returned from a valaidation() when a
+    value is not valid (e.g., not in enum)
+    """
+    def __init__(self, value, validValues):
+        ValidationFailure.__init__(self, str(value) + " is not in the valid set " + str(validValues))
+        self.value = value
+        self.validValues = validValues
 
 class InvalidLength(ValidationFailure):
     """
@@ -115,7 +125,15 @@ class InvalidProtocolDefinition(NetworkMessageException):
     """
     
 class DeserializationError(NetworkMessageException):
+    """
+    This execption is raised when deserialization throws an error
+    """
     def __init__(self, e, msg, partialMsgHandler):
         Exception.__init__(self, msg)
         self.e = e
         self.msgHandler = partialMsgHandler
+        
+class UnexpectedMessageError(NetworkMessageException):
+    """
+    This exception is raised when a message is received, but of the wrong type
+    """

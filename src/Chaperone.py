@@ -87,12 +87,12 @@ def main(args):
         raise Exception("Port out of range. Must fall between %d and %d" % (k_MIN_TCP_PORT, k_MAX_TCP_PORT))
     
     if not config.daemon:
-        server = playground.network.server.PlaygroundServer('localhost', port)
+        chaperone = playground.network.chaperone.Chaperone('localhost', port)
         if config.error_rate:
-            server.setNetworkErrorRate(*config.error_rate)
+            chaperone.setNetworkErrorRate(*config.error_rate)
         if config.loss_rate:
-            server.setNetworkLossRate(*config.loss_rate)
-        server.run()
+            chaperone.setNetworkLossRate(*config.loss_rate)
+        chaperone.run()
     else:
         failedCount = 0
         while True:
@@ -119,10 +119,18 @@ def main(args):
     return 0
 
 if __name__ == "__main__":
+    from playground.error import GetErrorReporter, ErrorLevel, SimpleDebugErrorHandler
+    from playground.twisted.error.ErrorHandlers import TwistedShutdownErrorHandler
+    rootError = GetErrorReporter("")
+    rootError.clearHandlers()
+    rootError.setHandler(ErrorLevel.LEVEL_WARNING, SimpleDebugErrorHandler())
+    TwistedShutdownErrorHandler.HandleRootFatalErrors()
     try:
         returnCode = main(sys.argv)
     except Exception, e:
         print("Error launching Chaperone.")
         print(e)
+        import traceback
+        traceback.print_exc()
         returnCode = -1
     sys.exit(returnCode)
