@@ -62,7 +62,7 @@
      class: logging.handlers.TimedRotatingFileHandler
      when: midnight
      delay: True
-     level: DEBUG
+     level: INFO
      formatter: simple
      filename: %(playgroundlog.logdir)s/playground.%(playgroundlog.nodeid)s.info.log
      encoding: utf8
@@ -72,7 +72,7 @@
      class: logging.handlers.TimedRotatingFileHandler
      when: midnight
      delay: True
-     level: DEBUG
+     level: ERROR
      formatter: simple
      filename: %(playgroundlog.logdir)s/playground.%(playgroundlog.nodeid)s.errors.log
      encoding: utf8
