@@ -311,6 +311,7 @@ class ListFieldValue(ProtoFieldValue):
         return buf
     
     def deserialize(self, buf, offset=0):
+        self.init()
         listSize, listOffset = self.__deserializeListLength(buf, offset)
         self.add(listSize)
         for elm in range(listSize):
@@ -318,6 +319,7 @@ class ListFieldValue(ProtoFieldValue):
         return listOffset
     
     def deserializeStream(self, bufs):
+        self.init()
         (listSize, offset) = getStreamUnpack(0, bufs, "!"+self.LENGTH_STRUCT_CODE)
         while listSize == None:
             yield None

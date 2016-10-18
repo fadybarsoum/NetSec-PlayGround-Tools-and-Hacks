@@ -16,12 +16,14 @@ class StateMachine(object):
     
     SIGNAL_UNKNOWN_TRANSITION = "STATE MACHINE: Unknown Transition"
     SIGNAL_UNKNOWN_STATE      = "STATE MACHINE: Unknown State"
+    SIGNAL_ERROR              = "STATE MACHINE: Error Reported"
     
     def __init__(self, name):
         self.__name = name
         self.__curState = None
         self.__errState = None
         self.__states = {}
+        self.__stateHistory = []
         
     def defaultErrorHandler(self, signal, data):
         raise StateMachineError(signal, data)
@@ -54,6 +56,7 @@ class StateMachine(object):
         if not errorState:
             self.addState(self.STATE_DEFAULT_ERROR_STATE, onEnter=self.defaultErrorHandler)
             self.__errorState = self.STATE_DEFAULT_ERROR_STATE
+        self.__stateHistory = [(None, startingState)]
         
     def signal(self, signal, data):
         if not self.__curState: raise StateMachineNotStarted()
@@ -64,11 +67,12 @@ class StateMachine(object):
         logging.debug("State machine %s existing current state %s" % (self.__name, self.__curState))
         onExit and onExit(signal, data)
             
-        if not transitions.has_key(signal):
-            data = (self.__curState, signal, data)
+        if signal == self.SIGNAL_ERROR or not transitions.has_key(signal):
             nextState = self.__errorState
-            signal = self.SIGNAL_UNKNOWN_TRANSITION
-            logging.debug("State machine %s has no such transition. Moving to error state %s" % (self.__name, nextState))
+            if signal != self.SIGNAL_ERROR:
+                data = (self.__curState, signal, data)
+                signal = self.SIGNAL_UNKNOWN_TRANSITION
+                logging.debug("State machine %s has no such transition. Moving to error state %s" % (self.__name, nextState))
             #nextState.enter(self.SIGNAL_UNKNOWN_TRANSITION, (self.__curState, signal, data))
         else:
             nextState = transitions[signal]
@@ -83,6 +87,7 @@ class StateMachine(object):
                 logging.debug("State machine %s entering state %s" % (self.__name, nextState))
         onEnter, _, _ = self.__states[nextState]
         self.__curState = nextState
+        self.__stateHistory.append((signal, self.__curState))
         
         ### IMPORTANT ###
         # onEnter MUST be called last because it could change state.
@@ -93,6 +98,11 @@ class StateMachine(object):
     
     def inErrorState(self): 
         return self.__curState == self.__errorState
+    
+    def previousSignalAndState(self, offset=1):
+        if offset > len(self.__stateHistory):
+            return (None, None)
+        return self.__stateHistory[-offset]
     
     def inTerminalState(self): 
         if not self.started(): return False
