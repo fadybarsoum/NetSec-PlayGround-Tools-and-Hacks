@@ -62,15 +62,15 @@ class ErrorReporter(object):
         self.__children = {}
         self.__handlers = {}
         self.__reportingLevels = []
-        self.__propegate = False
+        self.__propagate = False
         
     def localName(self): return self.__name
     
     def name(self): return self.__parent and (self.__parent.name() + self.__name) or self.__name
     
-    def propegate(self): return self.__propegate
+    def propegate(self): return self.__propagate
     
-    def setPropegation(self, onOff): self.__propegate = onOff
+    def setPropegation(self, onOff): self.__propagate = onOff
         
     def report(self, level, message, exception=None, stackOffset=0, explicitFrame=None):
         handled = False
@@ -84,12 +84,24 @@ class ErrorReporter(object):
                                             # If other layers get inbetween the call to reportError, they should
                                             #   increase the stackHack
             callerFrame = callerFrame[0] # Get just the frame, not any of the line info
+        result = None
         for repLevel in self.__reportingLevels:
             if repLevel <= level:
-                self.__handlers[repLevel].handle(self.name(), level, message, exception, callerFrame)
-                handled = True
-            else: break 
-        if (self.__propegate or not handled) and self.__parent:
+                try:
+                    result = self.__handlers[repLevel].handle(self.name(), level, message, exception, callerFrame)
+                except Exception, e:
+                    result = e
+                if isinstance(result,Exception):
+                    break
+                else:
+                    handled = True
+            else: break
+        if isinstance(result, Exception):
+            if self.__parent:
+                self.__parent.error("Error reporting [%s]"%message, e, stackOffset+1, explicitFrame)
+            else:
+                logging.error("Unhandled error %s" % result)
+        elif (self.__propagate or not handled) and self.__parent:
             self.__parent.report(level, message, exception, stackOffset+1, explicitFrame)
         
     
@@ -155,7 +167,7 @@ class ErrorHandler(object):
         '''
         Constructor
         '''
-        self.__name = handlerName and handlerName or "<Unnamed Handler %s>" % str(self)
+        self.__name = handlerName and handlerName or "<Unnamed %s Handler>" % str(self)
         
     def name(self):
         return self.__name
