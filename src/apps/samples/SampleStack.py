@@ -9,7 +9,8 @@ from twisted.internet.interfaces import ITransport, IStreamServerEndpoint
 from playground.network.message.ProtoBuilder import MessageDefinition
 from playground.network.message.StandardMessageSpecifiers import STRING
 from playground.network.common.Protocol import StackingTransport,\
-    StackingProtocolMixin, StackingFactoryMixin
+    StackingProtocolMixin, StackingFactoryMixin, MessageStorage
+from twisted.internet.error import ConnectionDone
 
 class FixedStreamCipherMessage(MessageDefinition):
     PLAYGROUND_IDENTIFIER = "apps.samples.SampleStack.FixedSreamCipherMessage"
@@ -36,33 +37,36 @@ class FixedStreamCipherTransport(StackingTransport):
             xorData += XorStrings(dataChunk, self.FixedKey)
         fscMessage = FixedStreamCipherMessage()
         fscMessage.data = xorData
-        self.lowerTransport().write(fscMessage.__serialize__())    
+        self.lowerTransport().write(fscMessage.__serialize__())
 
 class FixedStreamCipherProtocol(StackingProtocolMixin, Protocol):
     def __init__(self):
-        self.buffer = ""
+        self.messageStorage = MessageStorage()
         
     def connectionMade(self):
         higherTransport = FixedStreamCipherTransport(self.transport, self.factory.FixedKey)
         self.makeHigherConnection(higherTransport)
         
-    def dataReceived(self, data):
-        self.buffer += data
-        try:
-            fscMessage, bytesUsed = FixedStreamCipherMessage.Deserialize(data)
-            self.buffer = self.buffer[bytesUsed:]
-        except Exception, e:
-            #print "We had a deserialization error", e
-            return
+    def connectionLost(self, reason=ConnectionDone):
+        Protocol.connectionLost(self, reason=reason)
+        self.higherProtocol().connectionLost(reason)
+        self.higherProtocol().transport=None
+        self.setHigherProtocol(None)
         
-        xoredData = fscMessage.data
-        keySize = len(self.factory.FixedKey)
-        plainData = ""
-        while xoredData:
-            dataChunk, xoredData = xoredData[:keySize], xoredData[keySize:]
-            plainData += XorStrings(dataChunk, self.factory.FixedKey)
-        self.higherProtocol() and self.higherProtocol().dataReceived(plainData)
-        self.buffer and self.dataReceived("")
+    def dataReceived(self, data):
+        self.messageStorage.update(data)
+        for fscMessage in self.messageStorage.iterateMessages():
+        
+            xoredData = fscMessage.data
+            keySize = len(self.factory.FixedKey)
+            plainData = ""
+            while xoredData:
+                dataChunk, xoredData = xoredData[:keySize], xoredData[keySize:]
+                plainData += XorStrings(dataChunk, self.factory.FixedKey)
+            if self.higherProtocol():
+                self.higherProtocol().dataReceived(plainData)
+            else:
+                print "ERROR, still had data but no higher layer"
         
 class FixedStreamCipherFactory(StackingFactoryMixin, Factory):
     FixedKey = "PASSWORD"
