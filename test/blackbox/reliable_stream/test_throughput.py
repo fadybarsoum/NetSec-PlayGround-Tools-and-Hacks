@@ -33,6 +33,7 @@ class ThroughputTestPeer(framework.TestPeer):
         playgroundlog.startLogging(logctx)
         playgroundlog.UseStdErrHandler(True)
         if self.stackName:
+            print "importing stack", stackName
             try:
                 exec("import " + self.stackName)
             except Exception, e:
@@ -40,6 +41,7 @@ class ThroughputTestPeer(framework.TestPeer):
                 return
             stack=eval(self.stackName)
         else:
+            print "No stack. Just G2g"
             stack=None
         #playgroundlog.g_Ctx = ForcePacketTrace()
         self.control = core.ThroughputTestControl(self.testId(), transmissions, 
@@ -119,6 +121,7 @@ class ThroughputTest(object):
     
     def __init__(self, stackName=None):
         self.stackName=stackName
+        print "stackname", stackName
         self.allResults = []
         self.stoppers = []
         
@@ -301,11 +304,11 @@ class ThroughputTest(object):
             storeResultData.serverThroughput = server.throughput()
         return self.__storeResult(storeResultData)
     
-def multiErrorRateTest(impl1, impl2, resultsFileName, errorRates=None):
+def multiErrorRateTest(impl1, impl2, resultsFileName, errorRates=None, stackName=None):
     if not errorRates:
         errorRates = [0,10,20,30,40,50,60,70,80,90]
     print "Testing %s v %s" % (impl1, impl2)
-    test = ThroughputTest()
+    test = ThroughputTest(stackName)
     
     for i in errorRates:
         errorRate = (0,i,1000000)
@@ -324,22 +327,35 @@ if __name__=="__main__":
     args = sys.argv[1:]
     entries = None
     loglevel = "ERROR"
-    selfTest = True
-    while args and args[0][0] == '-':
-        print args[0]
-        flag = args.pop(0)
-        if flag == "-f":
-            bakeOffEntriesFile = args.pop(0)
-            with open(bakeOffEntriesFile) as f:
-                entries = f.readlines()
-        elif flag == "--loglevel":
-            loglevel = args.pop(0)
-            print "loglevel", loglevel
-        elif flag == "--noselftest":
-            selfTest = False
-    resultsFileName = args.pop(0)
+
+    positionalArgs = []
+    options = {}
+    nextArg = False
+    for arg in args:
+        if nextArg:
+            options[nextArg] = arg
+            nextArg = False
+        elif arg.startswith("--"):
+            k,v = arg.split("=")
+            options[k]=v
+        elif arg.startswith("-"):
+            nextArg = arg
+        else:
+            positionalArgs.append(arg)
+            
+    if options.has_key("-f") or options.has_key("--input_file"):
+        bakeOffEntriesFile =options.get('--input_file', options['-f'])
+        with open(bakeOffEntriesFile) as f:
+            entries = f.readlines()
+    if options.has_key('--loglevel'):
+        loglevel = options["--loglevel"]
+        print "loglevel", loglevel
+    selfTest = not (options.get("--noselftest", False))
+    stackName = options.get('--stack', None)
+    print "Start test for stack", stackName
+    resultsFileName = positionalArgs.pop(0)
     if not entries:
-        entries = args
+        entries = positionalArgs
     print entries
     
     random.seed(0)
@@ -364,7 +380,7 @@ if __name__=="__main__":
             if not entry2: continue
             if not selfTest and entry1 == entry2: continue
             entry2 = os.path.expanduser(entry2)
-            multiErrorRateTest(entry1, entry2, resultsFileName)
+            multiErrorRateTest(entry1, entry2, resultsFileName, stackName=stackName)
     print "BAKE OFF COMPLETE"
     logfile.close()
     
