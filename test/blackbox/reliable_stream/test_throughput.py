@@ -1,15 +1,23 @@
 import framework, sys, time
+import importlib
+# DO NOT IMPORT PLAYGROUND OR TWISTED. WILL NOT WORK WITH THE MULTIPROCESSING
+
+class ConnectionData(object):
+    def __init__(self, chaperoneAddr, chaperonePort, gatePort, gateAddr):
+        self.chaperoneAddr = chaperoneAddr
+        self.chaperonePort = int(chaperonePort)
+        self.playgroundAddr = gateAddr
+        self.gatePort = int(gatePort)
 
 class ThroughputTestPeer(framework.TestPeer):
-    def __init__(self, testId, connectionType):
+    def __init__(self, testId, stackName=None):
         framework.TestPeer.__init__(self, testId)
-        self.chaperoneAddr = None
-        self.chaperonePort = None
-        self.addr = None
+        self.gateAddr = None
+        self.gatePort = None
         self.serverAddr = None
         self.serverPort = None
         self.playgroundPath = None
-        self.connectionType = connectionType
+        self.stackName = stackName
         
     def _realStart(self, transmissions, **parameters):
         sys.path.insert(0, self.playgroundPath)
@@ -17,15 +25,30 @@ class ThroughputTestPeer(framework.TestPeer):
         print "Starting test for", self.playgroundPath, playground
         import test_throughput_core as core
         from playground import playgroundlog
+        logctx = playgroundlog.LoggingContext("peer_%s" % self.testId())
+    
+        # Uncomment the next line to turn on "packet tracing"
+        #logctx.doPacketTracing = True
+    
+        playgroundlog.startLogging(logctx)
+        playgroundlog.UseStdErrHandler(True)
+        if self.stackName:
+            try:
+                exec("import " + self.stackName)
+            except Exception, e:
+                print "Failed to start because could not import stack", self.stackName, e
+                return
+            stack=eval(self.stackName)
+        else:
+            stack=None
         #playgroundlog.g_Ctx = ForcePacketTrace()
         self.control = core.ThroughputTestControl(self.testId(), transmissions, 
                                                   onEnd=self.onTestEnd,
                                                   onConnect=self.onTestConnect,
                                                   txDelay=.1)
-        self.testLauncher = core.TestLauncher(self.chaperoneAddr, self.chaperonePort)
+        self.testLauncher = core.TestLauncher(self.gateAddr, self.gatePort)
         self.setSharedData("STARTED",True)
-        self.testLauncher.startTest(self.control, self.addr, self.serverAddr, 
-                                    self.serverPort, self.connectionType)
+        self.testLauncher.startTest(self.control, self.serverAddr, self.serverPort, stack)
         
     def onTestEnd(self, reason):
         print self.testId(), "Test completed. Shutting down", reason
@@ -36,7 +59,7 @@ class ThroughputTestPeer(framework.TestPeer):
         self.setSharedData("FINISHED",True)
         results = list(self.control.iterResults())
         self.setSharedData("RESULTS",results)
-        self.testLauncher.shutdownPlayground()
+        self.testLauncher.shutdown()
         
     def onTestConnect(self, protocol):
         print self.testId(), "Connected"
@@ -60,10 +83,17 @@ class ThroughputTestPeer(framework.TestPeer):
     def throughput(self):
         return self.sharedData("THROUGHPUT",0.0)
 
-class NetSecSpring2016_ReliableTest(object):
-    SERVER_ADDRESS = "20161.0.1000.1"
-    CLIENT_ADDRESS = "20161.0.1000.2"
+class ThroughputTest(object):
+    CLIENT_PLAYGROUND_ADDR = "20164.0.0.1"
+    CLIENT_GATE_ADDR = "127.0.0.1"
+    CLIENT_GATE_PORT = 9091
+    SERVER_PLAYGROUND_ADDR = "20164.0.0.2"
+    SERVER_GATE_ADDR = "127.0.0.1"
+    SERVER_GATE_PORT = 9092
     SERVER_PORT = 1000
+    
+    CHAPERONE_ADDR = "127.0.0.1"
+    CHAPERONE_PORT = 9090
     
     class Result(object):
         def __init__(self):
@@ -87,8 +117,18 @@ class NetSecSpring2016_ReliableTest(object):
                     self.bytesRouted, self.bytesDamaged, self.packSent, self.packDamaged,
                     self.clientThroughput, self.serverThroughput)
     
-    def __init__(self):
+    def __init__(self, stackName=None):
+        self.stackName=stackName
         self.allResults = []
+        self.stoppers = []
+        
+    def __stop(self):
+        for stopper in self.stoppers:
+            try:
+                stopper.stop()
+                stopper.join()
+            except:
+                pass
         
     def __storeResult(self, res):
         self.allResults.append(res.toTuple())
@@ -113,13 +153,14 @@ class NetSecSpring2016_ReliableTest(object):
                  ]
         
     def _configureTestPeer(self, testPeer, isServer):
-        testPeer.chaperoneAddr = "127.0.0.1"
-        testPeer.chaperonePort = 9090
         if isServer:
-            testPeer.addr = self.SERVER_ADDRESS
+            testPeer.gateAddr = self.SERVER_GATE_ADDR
+            testPeer.gatePort = self.SERVER_GATE_PORT
+            
         else:
-            testPeer.addr = self.CLIENT_ADDRESS
-            testPeer.serverAddr = self.SERVER_ADDRESS
+            testPeer.gateAddr = self.CLIENT_GATE_ADDR
+            testPeer.gatePort = self.CLIENT_GATE_PORT
+            testPeer.serverAddr = self.SERVER_PLAYGROUND_ADDR
         testPeer.serverPort = self.SERVER_PORT
         
     def syncWait(self, condition, wait, gran=1.0):
@@ -139,33 +180,60 @@ class NetSecSpring2016_ReliableTest(object):
         storeResultData.server = serverPlaygroundPath
         
         chaperone = framework.ChaperoneControl()
+        self.stoppers.append(chaperone)
         chaperone.start(**chaperoneArgs)
         print "waiting for chaperone"
-        result = self.syncWait(chaperone.running, 30)
+        result = self.syncWait(chaperone.running, 10)
         if not result:
             print "Could not start chaperone. Exiting"
-            chaperone.stop()
-            chaperone.join()
+            self.__stop()
             return self.__storeResult(storeResultData)
         
-        client = ThroughputTestPeer("ThroughputClient", "RELIABLE_STREAM")
-        server = ThroughputTestPeer("ThroughputServer", "RELIABLE_STREAM")
+        serverG2gConfig = ConnectionData(self.CHAPERONE_ADDR, self.CHAPERONE_PORT, 
+                                         self.SERVER_GATE_PORT, self.SERVER_PLAYGROUND_ADDR)
+        serverGate = framework.GateControl(serverG2gConfig)
+        self.stoppers.append(serverGate)
+        serverGate.start()
+        print "waiting for Server Gate"
+        result = self.syncWait(serverGate.running, 10)
+        if not result:
+            print "Could not start server gate. Exiting"
+            self.__stop()
+            return self.__storeResult(storeResultData)
+        
+        clientG2gConfig = ConnectionData(self.CHAPERONE_ADDR, self.CHAPERONE_PORT, 
+                                         self.CLIENT_GATE_PORT, self.CLIENT_PLAYGROUND_ADDR)
+        clientGate = framework.GateControl(clientG2gConfig)
+        self.stoppers.append(clientGate)
+        clientGate.start()
+        print "waiting for Client Gate"
+        result = self.syncWait(clientGate.running, 10)
+        if not result:
+            print "Could not start client gate. Exiting"
+            self.__stop()
+            return self.__storeResult(storeResultData)
+        
+        # The gates may take a moment to start up. So let's sleep for a second or two
+        time.sleep(2)
+        
+        client = ThroughputTestPeer("ThroughputClient", self.stackName)
+        server = ThroughputTestPeer("ThroughputServer", self.stackName)
         self._configureTestPeer(client, isServer=False)
         self._configureTestPeer(server, isServer=True)
         client.playgroundPath = clientPlaygroundPath
         server.playgroundPath = serverPlaygroundPath
         server.start(self._getTransmissionTemplates())
+        self.stoppers.append(server)
         print "waiting for server"
         result = self.syncWait(server.started, 15)
         if not result:
             print "Could not start server. Exiting"
-            chaperone.stop()
-            server.stop()
-            chaperone.join(), server.join()
+            self.__stop()
             return self.__storeResult(storeResultData)
         
         templates = self._getTransmissionTemplates()
         client.start(templates)
+        self.stoppers.append(client)
         result = self.syncWait(client.connected, 30)
         storeResultData.clientFailCount = len(templates)
         storeResultData.serverFailCount = len(templates)
@@ -173,15 +241,11 @@ class NetSecSpring2016_ReliableTest(object):
             result = self.syncWait(server.connected, 20)
         if not result:
             print "Could not connect client and/or server. Full stop on test"
-            chaperone.stop()
-            server.stop()
-            client.stop()
-            chaperone.join(), server.join(), client.join()
+            self.__stop()
             return self.__storeResult(storeResultData)
         client.join()
         server.join()
-        chaperone.stop()
-        chaperone.join()
+        self.__stop()
         testFinished = True
         print "TEST COMPLETE. DATA:"
         stats = chaperone.statistics()
@@ -241,7 +305,7 @@ def multiErrorRateTest(impl1, impl2, resultsFileName, errorRates=None):
     if not errorRates:
         errorRates = [0,10,20,30,40,50,60,70,80,90]
     print "Testing %s v %s" % (impl1, impl2)
-    test = NetSecSpring2016_ReliableTest()
+    test = ThroughputTest()
     
     for i in errorRates:
         errorRate = (0,i,1000000)
@@ -256,6 +320,7 @@ class ForcePacketTrace(object):
 if __name__=="__main__":
     import logging, random, os
     
+        
     args = sys.argv[1:]
     entries = None
     loglevel = "ERROR"
@@ -275,7 +340,7 @@ if __name__=="__main__":
     resultsFileName = args.pop(0)
     if not entries:
         entries = args
-    
+    print entries
     
     random.seed(0)
     logging.getLogger("").setLevel(loglevel)

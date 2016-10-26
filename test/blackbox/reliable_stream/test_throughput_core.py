@@ -1,15 +1,16 @@
 
 from playground.network.message.StandardMessageSpecifiers import UINT4, STRING
 from playground.network.common import PlaygroundAddress, Packet
-from playground.network.common.MessageHandler import SimpleMessageHandlingProtocol
 from playground.network.message.ProtoBuilder import MessageDefinition
 from playground.network.message import MessageData
-from playground.network.client.ClientApplicationServer import ClientApplicationServer, ClientApplicationClient
-from playground.network.client import ClientBase
 
 import hashlib, random, time
 
 from twisted.internet import reactor
+from twisted.internet.protocol import Protocol, Factory
+from playground.network.common.Protocol import MessageStorage
+from playground.twisted.endpoints.GateEndpoint import GateServerEndpoint, GateClientEndpoint
+from twisted.internet.endpoints import connectProtocol
 
 class DataMessage(MessageDefinition):
     PLAYGROUND_IDENTIFIER = "test.blackbox.reliable_stream.throughput.DataMessage"
@@ -50,9 +51,9 @@ class ThroughputTestControl(object):
         self.protocol = protocol
         txDelay = self.parameters.get("txDelay", self.DEFAULT_TX_DELAY)
         self.startTime = time.time()
-        self.protocol.callLater(txDelay, self.processNextTransmission)
+        reactor.callLater(txDelay, self.processNextTransmission)
         self.lastActivity = time.time()
-        self.protocol.callLater(self.noActivityTimeout, self.processActivityTimeout)
+        reactor.callLater(self.noActivityTimeout, self.processActivityTimeout)
         cb = self.parameters.get("onConnect",None)
         if cb: cb(protocol)
         
@@ -97,7 +98,7 @@ class ThroughputTestControl(object):
         cb = self.parameters.get("onSend",None)
         if cb: cb(txId)
         txDelay = self.parameters.get("txDelay",self.DEFAULT_TX_DELAY)
-        self.protocol.callLater(txDelay, self.processNextTransmission)
+        reactor.callLater(txDelay, self.processNextTransmission)
         
     def txReceived(self, senderTestid, txId, bytes, success):
         self.totalBytes += bytes
@@ -125,48 +126,57 @@ class ThroughputTestControl(object):
             if self.protocol and self.protocol.transport:
                 self.protocol.transport.loseConnection()
         else:
-            self.protocol.callLater(self.noActivityTimeout, self.processActivityTimeout)
+            reactor.callLater(self.noActivityTimeout, self.processActivityTimeout)
 
-class TestThroughputProtocol(SimpleMessageHandlingProtocol):
-    def __init__(self, factory, addr, testControl):
-        SimpleMessageHandlingProtocol.__init__(self, factory, addr)
-        self.registerMessageHandler(DataMessage, self.handleData)
+class TestThroughputProtocol(Protocol):
+    def __init__(self, factory, testControl):
+        self.factory = factory
         self.control = testControl
         self.sendDone = False
         self.recvDone = False
+        self.messageStorage = MessageStorage()
+        
+    def dataReceived(self, data):
+        self.messageStorage.update(data)
+        for msg in self.messageStorage.iterateMessages():
+            self.handleData(msg)
         
     def connectionMade(self):
         print "connection made"
-        SimpleMessageHandlingProtocol.connectionMade(self)
+        Protocol.connectionMade(self)
         self.control.startTest(self)
         
     def connectionLost(self, reason=None):
-        SimpleMessageHandlingProtocol.connectionLost(self, reason=reason)
+        print "Connection lost", reason
+        Protocol.connectionLost(self, reason=reason)
         self.control.endTest(self, reason)
         
     def send(self, data, txId):
-        messageBuilder = MessageData.GetMessageBuilder(DataMessage)
-        messageBuilder["sender_testid"].setData(self.control.testId)
-        messageBuilder["txId"].setData(txId)
-        messageBuilder["hash"].setData(hashlib.sha1(data).hexdigest())
-        messageBuilder["data"].setData(data)
-        self.transport.writeMessage(messageBuilder)
+        dataMessage = DataMessage(sender_testid=self.control.testId,
+                                     txId=txId, 
+                                     hash=hashlib.sha1(data).hexdigest(),
+                                     data=data)
+        serialized = dataMessage.__serialize__()
+        #print "test deserialize"
+        #DataMessage.Deserialize(serialized)
+        self.transport.write(dataMessage.__serialize__())
         
     def close(self):
         if self.sendDone:
             return
         self.sendDone = True
-        messageBuilder = MessageData.GetMessageBuilder(DataMessage)
-        messageBuilder["sender_testid"].setData("")
-        messageBuilder["txId"].setData(0)
-        messageBuilder["hash"].setData("")
-        messageBuilder["data"].setData("")
-        self.transport.writeMessage(messageBuilder)
+        print "sending empty hash message"
+        dataMessage = DataMessage(sender_testid="",
+                                  txId = 0,
+                                  hash = "",
+                                  data="")
+        self.transport.write(dataMessage.__serialize__())
         if self.recvDone:
+            print "receive already done, close transport"
             self.transport.loseConnection()
         
-    def handleData(self, protocol, msg):
-        msgObj = msg.data()
+    def handleData(self, msg):
+        msgObj = msg
         if self.recvDone or msgObj.hash == "":
             print self.control.testId,"received shutdown message"
             self.recvDone = True
@@ -179,45 +189,43 @@ class TestThroughputProtocol(SimpleMessageHandlingProtocol):
                                 len(msgObj.data),
                                 (trueHash==msgObj.hash))
         
-class TestThroughputFactory(ClientApplicationServer):
+class TestThroughputFactory(Factory):
     def __init__(self, control):
         self.control = control
         
     def buildProtocol(self, addr):
-        return TestThroughputProtocol(self, addr, self.control)
+        return TestThroughputProtocol(self, self.control)
 
 class TestLauncher(object):
-    def __init__(self, chaperoneAddr, chaperonePort):
-        self.chaperoneData = (chaperoneAddr, chaperonePort)
-        self.client = None
+    def __init__(self, gateAddr, gatePort):
+        self.gateAddr = gateAddr
+        self.gatePort = gatePort
         
-    def shutdownPlayground(self,delay=1):
-        if self.client:
-            reactor.callLater(delay, lambda: self.client.disconnectFromPlaygroundServer(stopReactor=True))
+    def shutdown(self,delay=1):
+        reactor.callLater(delay, reactor.stop)
+    #    if self.client:
+    #        reactor.callLater(delay, lambda: self.client.disconnectFromPlaygroundServer(stopReactor=True))
         
-    def startTest(self, testControl, addr, serverAddr, serverPort, connectionType="RAW"):
+    def startTest(self, testControl, serverAddr, serverPort, stack=None):
     
         #logctx = playgroundlog.LoggingContext()
         #logctx.nodeId = myAddress.toString()
     
         #logctx.doPacketTracing = True
         #playgroundlog.startLogging(logctx)
-    
-
-        self.client = ClientBase(PlaygroundAddress.FromString(addr))
-        chaperoneAddr, chaperonePort = self.chaperoneData
         
         throughputFactory = TestThroughputFactory(testControl)
         
-        if serverAddr == None or serverAddr == addr:
-            print "Starting server on", addr, serverPort, serverAddr
-            self.client.listen(throughputFactory, serverPort, connectionType)
+        if serverAddr == None:
+            print "Starting server on port", serverPort
+            serverEP = GateServerEndpoint(reactor, serverPort, self.gateAddr, self.gatePort, networkStack=stack)
+            serverEP.listen(throughputFactory)
+            #self.client.listen(throughputFactory, serverPort, connectionType)
         else:
             serverAddr = PlaygroundAddress.FromString(serverAddr)
             print "connecting client to", serverAddr, serverPort
-            self.client.runWhenConnected(lambda: self.client.connect(throughputFactory, 
-                                                                serverAddr, 
-                                                                serverPort,
-                                                                connectionType))
+            clientEP = GateClientEndpoint(reactor, serverAddr, serverPort, self.gateAddr, self.gatePort, networkStack=stack)
+            testProtocol = throughputFactory.buildProtocol(None)
+            connectProtocol(clientEP, testProtocol)
         
-        self.client.connectToChaperone(chaperoneAddr, chaperonePort)
+        reactor.run()

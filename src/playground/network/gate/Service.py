@@ -322,6 +322,7 @@ class Service(Factory):
             logger.debug("Dropping %d bytes from %s::%d because destination port %d is not connected" % 
                          (len(data), srcAddress, srcPort, dstPort))
             return
+        fullPacket = None
         if fragInfo:
             msgId, msgIndex, msgLast = fragInfo
             # The message buffers is a list of received fragments
@@ -345,13 +346,14 @@ class Service(Factory):
                     self.__messageBuffers[msgId] += [0] * missingCount
                 self.__messageBuffers[msgId].append(data)
                 fragsMissing += missingCount
-                maxIndex = msgIndex
+                maxIndex = msgIndex+1
                 
             lastReceived = lastReceived or msgLast
             
             if lastReceived and fragsMissing == 0:
                 # combine all the data
                 fullPacket = "".join(self.__messageBuffers[msgId])
+                del self.__messageBuffers[msgId]
             else:   
                 self.__messageBuffers[msgId].append([maxIndex, fragsMissing, lastReceived])
         else:
@@ -371,11 +373,11 @@ class Service(Factory):
                 logger.debug("Data received for port %d, but port not ready. Buffering" % dstPort)       
                 # TODO: replace string with parameter
                 d = dataProtocol # we're not really connected yet
-                d.addCallback(self.__sendPendingData, dstPort, srcAddress, srcPort, data)
+                d.addCallback(self.__sendPendingData, dstPort, srcAddress, srcPort, fullPacket)
             else:
                 logger.debug("Gate service forwarding %d bytes for srcPort %d" % 
-                             (len(data), srcPort))
-                dataProtocol.transport.write(data)
+                             (len(fullPacket), srcPort))
+                dataProtocol.transport.write(fullPacket)
             
     def __sendPendingData(self, result, dstPort, srcAddress, srcPort, data):
         if not self.__portMappings[dstPort].isConnectedTo(srcAddress, srcPort):
@@ -388,8 +390,12 @@ class Service(Factory):
         dataProtocol.transport.write(data)
         
     @classmethod
-    def Create(cls, reactor, configKey=None, defaultKey="default"):
+    def CreateFromConfig(cls, reactor, configKey=None, defaultKey="default"):
         g2gConnect = ConnectionData.CreateFromConfig(configKey, defaultKey)
+        cls.Create(reactor, g2gConnect)
+        
+    @classmethod
+    def Create(cls, reactor, g2gConnect):
         gateService = Service(reactor, g2gConnect.playgroundAddr)
         point = TCP4ClientEndpoint(reactor, g2gConnect.chaperoneAddr, g2gConnect.chaperonePort)
         d = connectProtocol(point, gateService.__chaperoneProtocol)

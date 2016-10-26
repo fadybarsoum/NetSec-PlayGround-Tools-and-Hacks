@@ -1,4 +1,5 @@
 from multiprocessing import Process, Manager
+# DO NOT IMPORT PLAYGROUND OR TWISTED HERE. Only Import in process to be run.
 
 g_Manager = Manager()
 g_Mailbox = g_Manager.dict()
@@ -19,8 +20,8 @@ class ChaperoneControl(object):
         self.process.start()
         
     def _realStart(self, errorRate, lossRate):
-        import playground.network.server.PlaygroundServer
-        server = playground.network.server.PlaygroundServer(self.addr, self.port)
+        from playground.network.chaperone import Chaperone
+        server = Chaperone(self.addr, self.port)
         if errorRate:
             server.setNetworkErrorRate(*errorRate)
         if lossRate:
@@ -51,6 +52,48 @@ class ChaperoneControl(object):
     def statistics(self):
         s = self.sharedData.get("STATISTICS",None)
         return s
+    
+class GateControl(object):
+    def __init__(self, gateConfig):
+        self.gateConfig = gateConfig
+        self.process = None
+        
+    def running(self):
+        return self.process and self.process.is_alive()
+        
+    def start(self):
+        self.process = Process(target=self._realStart, args=(self.gateConfig,))
+        self.process.start()
+        
+    def _realStart(self, gateConfig):
+        import sys
+        modkeys = sys.modules.keys()
+        i = 1
+
+        from playground import playgroundlog
+        from playground.network.gate import Service
+        #from playground.twisted.error.ErrorHandlers import TwistedShutdownErrorHandler
+        from twisted.internet import reactor
+        from playground.twisted.error.ErrorHandlers import TwistedShutdownErrorHandler
+        #logctx = playgroundlog.LoggingContext("GATE_%s" % gateConfig.playgroundAddr)
+    
+        # Uncomment the next line to turn on "packet tracing"
+        #logctx.doPacketTracing = True
+    
+        #playgroundlog.startLogging(logctx)
+        #playgroundlog.UseStdErrHandler(True)
+
+        TwistedShutdownErrorHandler.HandleRootFatalErrors()
+        Service.Create(reactor, gateConfig)
+        print "start gate", gateConfig.playgroundAddr
+        reactor.run()
+        print 'stop gate'
+        
+    def stop(self):
+        self.process.terminate()
+        
+    def join(self):
+        self.process.join()
     
 class TestPeer(object):
     BROADCAST_TEST_ID = "__broadcast__"

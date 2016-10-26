@@ -200,8 +200,8 @@ class LoggingErrorHandler(ErrorHandler):
         errMsg += "%s/%s ]\n[DETAILS]\n" % (reporterName and reporterName or "ROOT", self.name())
         errMsg += errorMessage
         
-        if exception and not stackFrame:
-            errMsg += "\n\tAssociated Error %s" % exception
+        if exception:
+            errMsg += "\n\tAssociated Exception %s" % exception
         if stackFrame:
             errMsg += "\n\tAssociated Trace: %s" % "".join(traceback.format_stack(stackFrame)) 
         
