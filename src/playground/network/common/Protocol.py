@@ -43,11 +43,13 @@ class MessageStorage(object):
         self.__streamIterator = None
         
     def popMessage(self):
+        dirty = False
         while self.__packetStorage and self.__packetStorage[0]:
             if not self.__streamIterator:
                 self.__streamIterator = self.__messageType.DeserializeStream(self.__packetStorage)
             try:
                 message = self.__streamIterator.next()
+                dirty = False
             except StopIteration:
                 message = None
                 self.__streamIterator = None
@@ -55,7 +57,11 @@ class MessageStorage(object):
                 self.__forceAdvanceBufferPointer()
                 continue
             except DeserializationError, e:
-                self.__errReporter.error("Deserialization error.", exception=e)
+                if not dirty:
+                    # we have an error. It may take use some time to find the right place
+                    # in the stream. Don't report the error until we're done or found a good spot
+                    dirty = True
+                    self.__errReporter.error("New Deserialization error. Attempt to get back in stream.", exception=e)
                 self.__streamIterator = None
                 self.__forceAdvanceBufferPointer()
                 continue
