@@ -91,7 +91,7 @@ class StateMachine(object):
         
         ### IMPORTANT ###
         # onEnter MUST be called last because it could change state.
-        onEnter(signal, data)
+        onEnter and onEnter(signal, data)
         
     def started(self): 
         return self.__curState != None
