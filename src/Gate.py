@@ -21,5 +21,5 @@ if __name__=="__main__":
     playgroundlog.startLogging(logctx)
     playgroundlog.UseStdErrHandler(True)
     TwistedShutdownErrorHandler.HandleRootFatalErrors()
-    Service.Create(reactor, gateConfig)
+    Service.CreateFromConfig(reactor, gateConfig)
     reactor.run()

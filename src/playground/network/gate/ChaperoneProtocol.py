@@ -35,7 +35,7 @@ class ChaperoneProtocol(Protocol):
     SIGNAL_REG_FAILED   = "Chaperone Protocol: chaperone denied registration"
     SIGNAL_UNREG_SENT   = "Chaperone Protocol: unregistration sent to chaperone"
     
-    MAX_MSG_SIZE = (2**16)-1
+    MAX_MSG_SIZE = (2**16) # This is about the size of a TCP packet
     FRAMING_SIZE = (2**12)
     MAX_FRAG_AGE = 10*60 # Ten minute time-out on G2gMessage Frags
     
@@ -89,10 +89,17 @@ class ChaperoneProtocol(Protocol):
         g2gMessage = Gate2GateMessage(dstAddress = dstAddress,
                                       dstPort    = dstPort,
                                       srcAddress = self.__gateAddress,
-                                      srcPort    = srcPort,
-                                      ID         = random.getrandbits(64))
+                                      srcPort    = srcPort)
         
+        if len(data) <= self.MAX_MSG_SIZE:
+            g2gMessage.gatePacket = data
+            self.transport.write(Packet.MsgToPacketBytes(g2gMessage))
+            return
+        
+        g2gMessage.ID = random.getrandbits(64)
+        g2gMessage.lastPacket = False
         index = 0
+        
         while data:
             g2gMessage.index = index
             g2gMessage.gatePacket = data[:self.MAX_MSG_SIZE]
@@ -104,7 +111,6 @@ class ChaperoneProtocol(Protocol):
             if not data: g2gMessage.lastPacket = True
             
             # transmit packet
-            print "Sending packet %d to Chaperone" % index
             self.transport.write(Packet.MsgToPacketBytes(g2gMessage))
             
     # Negotiation State Enter Callback
