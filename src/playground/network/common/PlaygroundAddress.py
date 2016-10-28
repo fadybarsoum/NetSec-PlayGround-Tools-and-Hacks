@@ -84,7 +84,7 @@ class PlaygroundAddress(object):
 class PlaygroundAddressPair(object):
     def __init__(self, playgroundAddress, port):
         if not isinstance(playgroundAddress, PlaygroundAddress):
-            raise Exception("Argument 1 to PlaygroundAddressPair must be PlaygroundAddress")
+            playgroundAddress = PlaygroundAddress.FromString(playgroundAddress)
         if port < 0:
             raise Exception("Port must be positive")
         self.host = playgroundAddress

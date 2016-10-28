@@ -31,7 +31,7 @@ class ThroughputTestPeer(framework.TestPeer):
         #logctx.doPacketTracing = True
     
         playgroundlog.startLogging(logctx)
-        playgroundlog.UseStdErrHandler(True)
+        #playgroundlog.UseStdErrHandler(True)
         if self.stackName:
             print "importing stack", stackName
             try:
@@ -350,6 +350,10 @@ if __name__=="__main__":
     if options.has_key('--loglevel'):
         loglevel = options["--loglevel"]
         print "loglevel", loglevel
+    if options.has_key('--error_rate'):
+        errorRates=[int(options["--error_rate"])]
+    else:
+        errorRates=None
     selfTest = not (options.get("--noselftest", False))
     stackName = options.get('--stack', None)
     print "Start test for stack", stackName
@@ -380,7 +384,7 @@ if __name__=="__main__":
             if not entry2: continue
             if not selfTest and entry1 == entry2: continue
             entry2 = os.path.expanduser(entry2)
-            multiErrorRateTest(entry1, entry2, resultsFileName, stackName=stackName)
+            multiErrorRateTest(entry1, entry2, resultsFileName, stackName=stackName, errorRates=errorRates)
     print "BAKE OFF COMPLETE"
     logfile.close()
     

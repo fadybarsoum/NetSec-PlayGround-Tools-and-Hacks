@@ -101,6 +101,10 @@ class ThroughputTestControl(object):
         reactor.callLater(txDelay, self.processNextTransmission)
         
     def txReceived(self, senderTestid, txId, bytes, success):
+        if not senderTestid:
+            # intermediate update
+            self.lastActivity = time.time()
+            return
         self.totalBytes += bytes
         self.endTime = time.time()
         self.lastActivity = time.time()
@@ -121,12 +125,16 @@ class ThroughputTestControl(object):
                 yield (senderTestId, txId, result)
                 
     def processActivityTimeout(self):
-        if self.lastActivity + self.noActivityTimeout < time.time():
+        if self.lastActivity and self.lastActivity + self.noActivityTimeout < time.time():
+            print "Activity timeout"
             self.endTest(self.protocol, "timeout")
             if self.protocol and self.protocol.transport:
                 self.protocol.transport.loseConnection()
-        else:
+        elif self.lastActivity:
             reactor.callLater(self.noActivityTimeout, self.processActivityTimeout)
+            
+    def disableActivityTimeout(self):
+        self.lastActivity = None
 
 class TestThroughputProtocol(Protocol):
     def __init__(self, factory, testControl):
@@ -137,6 +145,7 @@ class TestThroughputProtocol(Protocol):
         self.messageStorage = MessageStorage()
         
     def dataReceived(self, data):
+        self.control.txReceived(None, None, len(data), False)
         self.messageStorage.update(data)
         for msg in self.messageStorage.iterateMessages():
             self.handleData(msg)
@@ -180,6 +189,7 @@ class TestThroughputProtocol(Protocol):
         if self.recvDone or msgObj.hash == "":
             print self.control.testId,"received shutdown message"
             self.recvDone = True
+            self.control.disableActivityTimeout()
             if self.sendDone:
                 self.transport.loseConnection()
             return
