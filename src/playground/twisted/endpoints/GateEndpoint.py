@@ -24,6 +24,7 @@ from playground.network.gate import ConnectionData
 from twisted.internet.error import ConnectError
 from playground.network.common.Protocol import StackingTransport, MessageStorage,\
     StackingProtocolMixin, StackingFactoryMixin
+from playground.network.common.PlaygroundAddress import PlaygroundAddressPair
 
 errReporter = GetErrorReporter(__name__)
 g_logger = logging.getLogger(__name__)
@@ -282,7 +283,7 @@ class GateCallbackProtocol(Protocol, StackingProtocolMixin):
         self.factory.registerCallbackProtocol(self.transport.getPeer().port, self)
         
     def connectionLost(self, reason=None):
-        g_logger.info("Gate Callback connection lost. Disconnecting higher protocol")
+        g_logger.info("Gate Callback connection lost. Disconnecting higher protocol. reason=%s" % reason)
         if self.higherProtocol(): 
             self.higherProtocol().connectionLost(reason)
             self.setHigherProtocol(None)
@@ -313,10 +314,15 @@ class GateTransport(StackingTransport):
         self.lowerTransport().write(data)
         
     def getHost(self):
-        return (self.__srcAddr, self.__srcPort)
+        return PlaygroundAddressPair(self.__srcAddr, self.__srcPort)
     
     def getPeer(self):
-        return (self.__dstAddr, self.__dstPort)
+        return PlaygroundAddressPair(self.__dstAddr, self.__dstPort)
+    
+    def loseConnection(self):
+        g_logger.info("GateTransport %s to %s lose connection" % (self.getHost(),
+                                                                  self.getPeer()))
+        return StackingTransport.loseConnection(self)
     
 class GateCallbackFactory(Factory):
     def __init__(self):

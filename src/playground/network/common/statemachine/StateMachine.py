@@ -65,7 +65,10 @@ class StateMachine(object):
         
         _, onExit, transitions = self.__states[self.__curState]
         logging.debug("State machine %s existing current state %s" % (self.__name, self.__curState))
-        onExit and onExit(signal, data)
+        if onExit:
+            onExitResult = onExit(signal, data)
+            if onExitResult != None:
+                signal, data = onExitResult
             
         if signal == self.SIGNAL_ERROR or not transitions.has_key(signal):
             nextState = self.__errorState
