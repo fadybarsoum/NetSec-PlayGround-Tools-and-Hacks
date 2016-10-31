@@ -21,8 +21,6 @@ from playground.network.message.ProtoBuilder import MessageDefinition
 from playground.twisted.endpoints import GateServerEndpoint, GateClientEndpoint
 from playground.twisted.error.ErrorHandlers import TwistedShutdownErrorHandler
 
-from apps.samples import SampleStack
-
 from twisted.internet import defer, stdio
 from twisted.internet import reactor
 from twisted.internet.protocol import Protocol, Factory, connectionDone
@@ -190,18 +188,30 @@ class ClientTest(basic.LineReceiver):
             self.transport.loseConnection()
         
 
-USAGE = """usage: echotest <mode> [<gatekey>]
+USAGE = """usage: echotest <mode> [--gate=<gatekey> --stack=<stack>]
   mode is either 'server' or a server's address (client mode)"""
 
 if __name__=="__main__":
-    echoArgs = sys.argv[1:]
-    if len(echoArgs) == 1:
-        mode = echoArgs[0]
-        gateKey = None
-    elif len(echoArgs) == 2:
-        mode, gateKey = echoArgs
-    else:
+    echoArgs = {}
+    
+    args= sys.argv[1:]
+    i = 0
+    for arg in args:
+        if arg.startswith("-"):
+            k,v = arg.split("=")
+            echoArgs[k]=v
+        else:
+            echoArgs[i] = arg
+            i+=1
+    
+    if not echoArgs.has_key(0):
         sys.exit(USAGE)
+    gateKey = echoArgs.get("--gate",None)
+    stack = echoArgs.get("--stack",None)
+    if stack:
+        exec("import " + stack)
+        networkStack = eval(stack)
+    mode = echoArgs[0]
     
     # Turn on logging
     logctx = playgroundlog.LoggingContext("echo_"+str(mode))
@@ -226,7 +236,7 @@ if __name__=="__main__":
         
         # tell the playground client to connect to playground server and start running
         #client.connectToChaperone(chaperoneAddr, chaperonePort)
-        echoServerEndpoint = GateServerEndpoint.CreateFromConfig(reactor, 101, gateKey, networkStack=SampleStack)
+        echoServerEndpoint = GateServerEndpoint.CreateFromConfig(reactor, 101, gateKey, networkStack=networkStack)
         d = echoServerEndpoint.listen(echoProtocolServer)
         d.addErrback(logger.error)
         
@@ -238,7 +248,7 @@ if __name__=="__main__":
         #except:
         #    sys.exit(USAGE)
         # This guy will be the client. The server's address is hard coded
-        echoClientEndpoint = GateClientEndpoint.CreateFromConfig(reactor, echoServerAddr, 101, gateKey, networkStack=SampleStack)
+        echoClientEndpoint = GateClientEndpoint.CreateFromConfig(reactor, echoServerAddr, 101, gateKey, networkStack=networkStack)
         tester = ClientTest(echoServerAddr, echoClientEndpoint)
         
         stdio.StandardIO(tester)

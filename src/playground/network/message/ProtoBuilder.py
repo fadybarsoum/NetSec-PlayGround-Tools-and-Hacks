@@ -366,7 +366,6 @@ class StructuredData(ProtoFieldValue):
         while fieldCount == None: 
             yield None
             (fieldCount, offset) = getStreamUnpack(offset, bufs, "!H")
-        
         for i in range(fieldCount):
             (fieldID, offset) = getStreamUnpack(offset, bufs, "!H")
             while fieldID == None: 
