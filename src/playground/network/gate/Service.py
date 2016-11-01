@@ -64,7 +64,7 @@ App creating listener:
 import logging
 
 from twisted.internet.endpoints import TCP4ClientEndpoint, TCP4ServerEndpoint, connectProtocol
-from twisted.internet.protocol import Protocol, Factory
+from twisted.internet.protocol import Protocol, Factory, connectionDone
 
 from playground.error import GetErrorReporter
 
@@ -165,11 +165,16 @@ class ServiceControlProtocol(Protocol):
         self.transport.write(g2gResponse.__serialize__())
 
 class G2GDataProtocol(Protocol):
-    def __init__(self, chaperoneWriter):
+    def __init__(self, closer, chaperoneWriter):
+        self.closer = closer
         self.chaperoneWriter = chaperoneWriter
         
     def dataReceived(self, data):
         self.chaperoneWriter(data)
+        
+    def connectionLost(self, reason=connectionDone):
+        Protocol.connectionLost(self, reason=reason)
+        self.closer()
         
 class Port(object):
     PORT_TYPE_INCOMING = 1
@@ -200,8 +205,8 @@ class Port(object):
     def getConnectionData(self, dstAddr, dstPort):
         return self._connections.get((dstAddr, dstPort), (None,None))
     
-    def _createDataProtocol(self, dstAddr, dstPort):
-        return G2GDataProtocol(lambda data: self._connComponents.chaperoneProtocol.send(self._portNum,
+    def _createDataProtocol(self, dstAddr, dstPort, closer):
+        return G2GDataProtocol(closer, lambda data: self._connComponents.chaperoneProtocol.send(self._portNum,
                                                                                          dstAddr, dstPort,
                                                                                          data))
 
@@ -227,6 +232,13 @@ class IncomingPort(Port):
         except:
             pass
         
+    def clearConnection(self, dstAddr, dstPort):
+        if self._connections.has_key((dstAddr, dstPort)):
+            logger.info("Clearing server connection to %s:%s" % (dstAddr, dstPort))
+            del self._connections[(dstAddr, dstPort)]
+        else:
+            logger.debug("Cannot clear connection %s %s, does not exist" % (dstAddr, dstPort))
+        
     def spawnNewConnection(self, dstAddr, dstPort):
         if self._connections.has_key((dstAddr, dstPort)):
             d = Deferred()
@@ -234,7 +246,7 @@ class IncomingPort(Port):
             return d
         logger.info("Port map for %d (resvId %d) spawning new connection from %s %d" % 
                     (self._portNum, self.__resvId, dstAddr, dstPort))
-        gConn = self._createDataProtocol(dstAddr, dstPort)
+        gConn = self._createDataProtocol(dstAddr, dstPort, lambda: self.clearConnection(dstAddr, dstPort))
         point = TCP4ClientEndpoint(self._connComponents.reactor, 
                                    self._connComponents.revAddr, self._connComponents.revPort)
         spawnD = Deferred()
@@ -245,11 +257,11 @@ class IncomingPort(Port):
         return spawnD
     
 class OutgoingPort(Port):
-    def __init__(self, resvId, num, dstAddr, dstPort, connComponents): 
+    def __init__(self, resvId, num, dstAddr, dstPort, connComponents, closer): 
         Port.__init__(self, num, Port.PORT_TYPE_OUTGOING, connComponents)
         logger.info("Port map for %d (resvId %d) connecting to outbound %s %d using callback addr %s:%d" %
                     (num, resvId, dstAddr, dstPort, connComponents.revAddr, connComponents.revPort))
-        gConn = self._createDataProtocol(dstAddr, dstPort)
+        gConn = self._createDataProtocol(dstAddr, dstPort, closer)
         point = TCP4ClientEndpoint(connComponents.reactor, 
                                    connComponents.revAddr, connComponents.revPort)
         self._connections[(dstAddr, dstPort)] = (point, gConn)
@@ -286,7 +298,7 @@ class Service(Factory):
                                                 callbackAddr, callbackPort,
                                                 controller, self.__chaperoneProtocol)
         srcPort = self.getFreeSrcPort()
-        port = OutgoingPort(resvId, srcPort, dstAddr, dstPort, components)
+        port = OutgoingPort(resvId, srcPort, dstAddr, dstPort, components, lambda: self.clearReservation(srcPort))
         self.__portMappings[srcPort] = port
         logger.info("Gate Service registering new outbound connection to %s %d with srcport %d" %
                     (dstAddr, dstPort, srcPort))
