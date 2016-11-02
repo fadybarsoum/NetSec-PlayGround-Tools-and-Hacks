@@ -6,6 +6,7 @@ from Crypto.Signature import PKCS1_v1_5
 from CertificateDatabase import CertificateDatabase
 from Crypto.Cipher.PKCS1_OAEP import PKCS1OAEP_Cipher
 from Crypto.Cipher import AES
+from PkiPlaygroundAddressPair import PkiPlaygroundAddressPair
 
 DefaultRSASigningAlgo = PKCS1_v1_5
 DefaultRSAEncryptionAlgo = PKCS1OAEP_Cipher
