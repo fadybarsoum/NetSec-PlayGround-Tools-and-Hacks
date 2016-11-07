@@ -91,6 +91,7 @@ class StackingFactoryMixin(object):
     
     @classmethod
     def Stack(cls, higherFactory):
+        "Deprecated"
         factory = cls()
         factory.setHigherFactory(higherFactory)
         return factory
