@@ -36,7 +36,7 @@ class MessageStorage(object):
             self.__packetStorage[0] = self.__packetStorage[0][offset:]
         
     def update(self, data):
-        self.__packetStorage.append(data)
+        if data: self.__packetStorage.append(data)
         
     def clear(self):
         self.__packetStorage = []
@@ -44,7 +44,10 @@ class MessageStorage(object):
         
     def popMessage(self):
         dirty = False
-        while self.__packetStorage and self.__packetStorage[0]:
+        while self.__packetStorage:
+            if not self.__packetStorage[0]:
+                self.__packetStorage.pop(0)
+                continue
             if not self.__streamIterator:
                 self.__streamIterator = self.__messageType.DeserializeStream(self.__packetStorage)
             try:
