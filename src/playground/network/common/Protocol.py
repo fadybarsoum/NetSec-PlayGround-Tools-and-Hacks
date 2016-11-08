@@ -90,8 +90,15 @@ class StackingFactoryMixin(object):
     __higherFactory = None
     
     @classmethod
+    def StackType(cls, higherFactoryType):
+        class StackedType(cls):
+            @classmethod
+            def Stack(self, higherFactory):
+                return cls.Stack(higherFactoryType.Stack(higherFactory))
+        return StackedType
+    
+    @classmethod
     def Stack(cls, higherFactory):
-        "Deprecated"
         factory = cls()
         factory.setHigherFactory(higherFactory)
         return factory
