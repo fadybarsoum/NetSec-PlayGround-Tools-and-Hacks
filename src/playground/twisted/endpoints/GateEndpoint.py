@@ -187,16 +187,7 @@ class GateServerEndpoint(object):
             raise Exception("Method 'listen' can only be called once.")
 
         if self.__networkStack:
-            if isinstance(self.__networkStack, type):
-                self.__listenFactory = self.__networkStack()
-            else:
-                self.__listenFactory = self.__networkStack
-
-            "TODO: Calling listen twice is bad. FIX IT"
-            stackFactory = self.__listenFactory
-            while stackFactory.higherFactory():
-                stackFactory = stackFactory.higherFactory()
-            stackFactory.setHigherFactory(factory)
+            self.__listenFactory = self.__networkStack.ListenFactory.Stack(factory)
         else:
             self.__listenFactory = factory
     
@@ -271,14 +262,7 @@ class GateClientEndpoint(object):
         if self.__connectFactory:
             raise Exception("Method 'connect' can only be called once.")
         if self.__networkStack:
-            if isinstance(self.__networkStack, type):
-                self.__connectFactory = self.__networkStack()
-            else:
-                self.__connectFactory = self.__networkStack
-            stackFactory = self.__connectFactory
-            while stackFactory.higherFactory():
-                stackFactory = stackFactory.higherFactory()
-            stackFactory.setHigherFactory(factory)
+            self.__connectFactory = self.__networkStack.ConnectFactory.Stack(factory)
         else:
             self.__connectFactory = factory
         
