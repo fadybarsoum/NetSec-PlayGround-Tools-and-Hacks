@@ -208,6 +208,7 @@ if __name__=="__main__":
         sys.exit(USAGE)
     gateKey = echoArgs.get("--gate",None)
     stack = echoArgs.get("--stack",None)
+    portNum = int(echoArgs.get("--port","101"))
     if stack:
         exec("import " + stack)
         networkStack = eval(stack)
@@ -236,7 +237,7 @@ if __name__=="__main__":
         
         # tell the playground client to connect to playground server and start running
         #client.connectToChaperone(chaperoneAddr, chaperonePort)
-        echoServerEndpoint = GateServerEndpoint.CreateFromConfig(reactor, 101, gateKey, networkStack=networkStack)
+        echoServerEndpoint = GateServerEndpoint.CreateFromConfig(reactor, portNum, gateKey, networkStack=networkStack)
         d = echoServerEndpoint.listen(echoProtocolServer)
         d.addErrback(logger.error)
         
@@ -248,7 +249,7 @@ if __name__=="__main__":
         #except:
         #    sys.exit(USAGE)
         # This guy will be the client. The server's address is hard coded
-        echoClientEndpoint = GateClientEndpoint.CreateFromConfig(reactor, echoServerAddr, 101, gateKey, networkStack=networkStack)
+        echoClientEndpoint = GateClientEndpoint.CreateFromConfig(reactor, echoServerAddr, portNum, gateKey, networkStack=networkStack)
         tester = ClientTest(echoServerAddr, echoClientEndpoint)
         
         stdio.StandardIO(tester)
