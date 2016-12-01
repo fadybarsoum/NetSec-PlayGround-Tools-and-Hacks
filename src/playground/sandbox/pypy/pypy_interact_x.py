@@ -5,8 +5,6 @@ Created on Mar 21, 2015
 Copied with few modifications from pypy_interact.py (version 2.2.1)
 '''
 import sys, os
-import pypy
-sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(pypy.__file__), "sandbox")))
 from rpython.translator.sandbox.vfs import Dir, RealDir, RealFile
 LIB_ROOT = "/usr/lib/pypy"
 
