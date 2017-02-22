@@ -279,7 +279,7 @@ class ThroughputTest(object):
                 else: testsPassed.append(testNumber)
             storeResultData.clientPassCount = len(testsPassed)
             storeResultData.clientFailCount = len(testsFailed)
-            print "Client successfully received server-sent tests %s" % testsPassed
+            print "Client (%s) successfully received server-sent tests %s" % (client.playgroundPath, testsPassed)
             if testsFailed:
                 print "Client did not receive/pass server-sent tests %s" % testsFailed
             print "Client throughput: ", client.throughput()  
@@ -297,7 +297,7 @@ class ThroughputTest(object):
                 else: testsPassed.append(testNumber)
             storeResultData.serverPassCount = len(testsPassed)
             storeResultData.serverFailCount = len(testsFailed)
-            print "Server successfully received server-sent tests %s" % testsPassed
+            print "Server (%s) successfully received server-sent tests %s" % (server.playgroundPath, testsPassed)
             if testsFailed:
                 print "Server did not receive/pass server-sent tests %s" % testsFailed
             print "Server throughput: ", server.throughput()

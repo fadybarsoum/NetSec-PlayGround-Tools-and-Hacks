@@ -3,6 +3,7 @@ import Errors
 import StandardMessageSpecifiers
 from ProtoBuilder import MessageDefinition
 from ProtoBuilder import StructuredData as MessageData
+from ProtoBuilder import MessageDefinitionMetaClass as MessageRegistry
 
 """
 The messages module. Using This module you should be able to easily

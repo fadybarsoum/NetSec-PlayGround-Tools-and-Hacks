@@ -56,6 +56,7 @@ class MessageDefinitionMetaClass(type):
     """
     RegisteredMessageDefinitions = {}
     MOST_RECENT = object()
+    REPLACE_DUPLICATES = False
     
     class DefinitionStoragePOD(object):
         def __init__(self):
@@ -87,7 +88,7 @@ class MessageDefinitionMetaClass(type):
         if not pod:
             pod = cls.DefinitionStoragePOD()
             storeDottedKey(ident, cls.RegisteredMessageDefinitions, pod)
-        if pod.versions.has_key((major,minor)):
+        if not cls.REPLACE_DUPLICATES and pod.versions.has_key((major,minor)):
             raise InvalidProtocolDefinition("Duplicate identifier " + ident + " for version " + dict["MESSAGE_VERSION"])
         
         dict["BODY"].append( ("playground_msgID", UINT8, DEFAULT_RANDOM8) )
