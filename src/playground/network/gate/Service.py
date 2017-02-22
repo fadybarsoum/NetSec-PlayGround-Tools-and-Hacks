@@ -74,6 +74,7 @@ from playground.network.message.definitions.playground.base import Gate2GateResp
 from playground.network.message.definitions.playground.base import RegisterGate
 
 from ChaperoneProtocol import ChaperoneProtocol
+from ChaperoneDemuxer import ChaperoneDemuxer, Port
 from ConnectionData import ConnectionData
 from twisted.internet.defer import Deferred
 from twisted.python.failure import Failure
@@ -176,55 +177,42 @@ class G2GDataProtocol(Protocol):
         Protocol.connectionLost(self, reason=reason)
         self.closer()
         
-class Port(object):
-    PORT_TYPE_INCOMING = 1
-    PORT_TYPE_OUTGOING = 2
-    PORT_TYPE_CLOSED = 0
-    
+class GateDataPort(Port):
+    class ConnectionData(Port.ConnectionData):
+        def __init__(self):
+            super(GateDataPort.ConnectionData,self).__init__()
+            self.deferred = None
+            self.endpoint = None
+            
     def __init__(self, portNum, portType, connComponents):
-        self._portNum = portNum
-        self._portType = portType
+        super(GateDataPort, self).__init__(portNum, portType)
         self._connComponents = connComponents
-        self._connections = {}
-        
-    def portType(self):
-        return self._portType
-    
-    def number(self):
-        return self._portNum
-        
-    def isListening(self):
-        return self._portType == self.PORT_TYPE_INCOMING
-    
-    def isConnectedTo(self, dstAddr, dstPort):
-        return self._connections.has_key((dstAddr, dstPort))
-    
-    def getConnectionList(self):
-        return self._connections.keys()
-    
-    def getConnectionData(self, dstAddr, dstPort):
-        return self._connections.get((dstAddr, dstPort), (None,None))
     
     def _createDataProtocol(self, dstAddr, dstPort, closer):
         return G2GDataProtocol(closer, lambda data: self._connComponents.chaperoneProtocol.send(self._portNum,
                                                                                          dstAddr, dstPort,
                                                                                          data))
 
-class IncomingPort(Port):
+class IncomingPort(GateDataPort):
     def __init__(self, resvId, num, connComponents):
-        Port.__init__(self, num, Port.PORT_TYPE_INCOMING, connComponents)
+        GateDataPort.__init__(self, num, Port.PORT_TYPE_INCOMING, connComponents)
         self.__resvId = resvId
         
     def __revConnected(self, result, resvId, dstAddr, dstPort, point, gConn):
-        _, spawnD = self._connections[(dstAddr, dstPort)]
+        connectionData = self._connections[(dstAddr, dstPort)]
+        spawnD = connectionData.deferred
+        
         self._connComponents.serviceProtocol.sendNewConnection(resvId, dstAddr, dstPort, gConn.transport.getHost().port)
-        self._connections[(dstAddr, dstPort)] = (point, gConn)
+        
+        connectionData.protocol = gConn
+        connectionData.encpoint = point
+        connectionData.deferred = None
         spawnD.callback("connected")
         
     def __revFailed(self, failure, dstAddr, dstPort):
         try:
-            _, spawnD = self.__connections[(dstAddr, dstPort)]
-            spawnD.errback(failure)
+            connectionData = self.__connections[(dstAddr, dstPort)]
+            connectionData.deferred.errback(failure)
         except:
             pass
         try:
@@ -249,22 +237,31 @@ class IncomingPort(Port):
         gConn = self._createDataProtocol(dstAddr, dstPort, lambda: self.clearConnection(dstAddr, dstPort))
         point = TCP4ClientEndpoint(self._connComponents.reactor, 
                                    self._connComponents.revAddr, self._connComponents.revPort)
+        
         spawnD = Deferred()
         d = connectProtocol(point, gConn)
-        self._connections[(dstAddr, dstPort)] = ("deferred", spawnD)
+        
+        connectionData = self.ConnectionData()
+        connectionData.deferred = spawnD
+        
+        self._connections[(dstAddr, dstPort)] = connectionData
         d.addCallback(self.__revConnected, self.__resvId, dstAddr, dstPort, point, gConn)
         d.addErrback(self.__revFailed, dstAddr, dstPort)
+        
         return spawnD
     
-class OutgoingPort(Port):
+class OutgoingPort(GateDataPort):
     def __init__(self, resvId, num, dstAddr, dstPort, connComponents, closer): 
-        Port.__init__(self, num, Port.PORT_TYPE_OUTGOING, connComponents)
+        GateDataPort.__init__(self, num, Port.PORT_TYPE_OUTGOING, connComponents)
         logger.info("Port map for %d (resvId %d) connecting to outbound %s %d using callback addr %s:%d" %
                     (num, resvId, dstAddr, dstPort, connComponents.revAddr, connComponents.revPort))
         gConn = self._createDataProtocol(dstAddr, dstPort, closer)
         point = TCP4ClientEndpoint(connComponents.reactor, 
                                    connComponents.revAddr, connComponents.revPort)
-        self._connections[(dstAddr, dstPort)] = (point, gConn)
+        connectionData = self.ConnectionData()
+        connectionData.endpoint = point
+        connectionData.protocol = gConn
+        self._connections[(dstAddr, dstPort)] = connectionData
         d = connectProtocol(point, gConn)
         d.addCallback(self.__connectComplete, resvId, gConn)
         
@@ -272,26 +269,18 @@ class OutgoingPort(Port):
         self._connComponents.serviceProtocol.completeConnection(resvId, gConn.transport.getHost().port)
         
         
-class Service(Factory):
+class Service(Factory, ChaperoneDemuxer):
     protocol = ServiceControlProtocol
-    MIN_FREE_PORT = 1000
-    MAX_FREE_PORT = 9999
     
     def __init__(self, reactor, gateAddr):
-        self.__portMappings = {}
+        ChaperoneDemuxer.__init__(self)
         self.__reactor = reactor
         self.__gateAddr = gateAddr
         self.__chaperoneProtocol = ChaperoneProtocol(gateAddr, self)
-        self.__messageBuffers = {}
-        self.__agedIds = set([])
+        
         
     def gateAddress(self):
         return self.__gateAddr
-        
-    def getFreeSrcPort(self):
-        for i in range(self.MIN_FREE_PORT, self.MAX_FREE_PORT+1):
-            if not self.__portMappings.has_key(i): return i
-        raise Exception("PORTS EXHAUSTED!")
 
     def registerConnection(self, resvId, dstAddr, dstPort, controller, callbackAddr, callbackPort):
         components = SingleConnectionComponents(self.__reactor,
@@ -299,7 +288,7 @@ class Service(Factory):
                                                 controller, self.__chaperoneProtocol)
         srcPort = self.getFreeSrcPort()
         port = OutgoingPort(resvId, srcPort, dstAddr, dstPort, components, lambda: self.clearReservation(srcPort))
-        self.__portMappings[srcPort] = port
+        self.reservePort(srcPort, port)
         logger.info("Gate Service registering new outbound connection to %s %d with srcport %d" %
                     (dstAddr, dstPort, srcPort))
         #"open to callback"
@@ -307,21 +296,16 @@ class Service(Factory):
         return True, srcPort, "Success"
         
     def registerListener(self, resvId, srcPort, controller, callbackAddr, callbackPort):
-        if self.__portMappings.has_key(srcPort):
+        if self.portInUse(srcPort):
             logger.error("Gate service could not register port %d because it is already in use" % srcPort)
             return False, "Port already in use"
         components = SingleConnectionComponents(self.__reactor,
                                                 callbackAddr, callbackPort,
                                                 controller, self.__chaperoneProtocol)
         port = IncomingPort(resvId, srcPort, components)
-        self.__portMappings[srcPort] = port
+        self.reservePort(srcPort, port)
         logger.info("Gate Service registering new listener on port %d" % srcPort)
         return True, "Success"
-    
-    def clearReservation(self, srcPort):
-        if self.__portMappings.has_key(srcPort):
-            logger.info("Closing reservation on port %d" % srcPort)
-            del self.__portMappings[srcPort]
     
     def start(self, result, chaperoneEndpoint, gatePort):
         self.__chaperoneEndpoint = chaperoneEndpoint
@@ -329,77 +313,40 @@ class Service(Factory):
         self.__gateEndpoint.listen(self)
         logger.info("Gate Service listening on TCP port %d" % gatePort)
         
-    def demux(self, srcAddress, srcPort, dstPort, data, fragInfo=None):
-        if not self.__portMappings.has_key(dstPort) or (not self.__portMappings[dstPort].isListening() and not self.__portMappings[dstPort].isConnectedTo(srcAddress, srcPort)):
-            logger.debug("Dropping %d bytes from %s::%d because destination port %d is not connected" % 
-                         (len(data), srcAddress, srcPort, dstPort))
-            return
-        fullPacket = None
-        if fragInfo:
-            msgId, msgIndex, msgLast = fragInfo
-            # The message buffers is a list of received fragments
-            # each at the index specified in the packet. There is
-            # a sentinal at the end containing a count of missing
-            # packets and whether the last packet has been received.
-
-            if not self.__messageBuffers.has_key(msgId):
-                self.__messageBuffers[msgId] = []
-                maxIndex, fragsMissing, lastReceived = 0, 0, False
-            else:
-                maxIndex, fragsMissing, lastReceived = self.__messageBuffers[msgId].pop(-1)
-            
-            if msgIndex < maxIndex:
-                if self.__messageBuffers[msgId][msgIndex] == 0:
-                    fragsMissing = fragsMissing - 1
-                self.__messageBuffers[msgId][msgIndex] = data
-            else:
-                missingCount = msgIndex - maxIndex
-                if missingCount:
-                    self.__messageBuffers[msgId] += [0] * missingCount
-                self.__messageBuffers[msgId].append(data)
-                fragsMissing += missingCount
-                maxIndex = msgIndex+1
+    def handleDataNoConnection(self, srcAddress, srcPort, dstPort, connectionData, fullPacket):
+        """ OLD WAY
+        if connectionData.endpoint == None:
+            if self.__portMappings[dstPort].isListening():
+                logger.info("Spawning new connection from %s:%d to port %s" % (srcAddress, srcPort, dstPort))
+                self.__portMappings[dstPort].spawnNewConnection(srcAddress, srcPort)
+                connectionData = self.__portMappings[dstPort].getConnectionData(srcAddress, srcPort)
+        """
                 
-            lastReceived = lastReceived or msgLast
-            
-            if lastReceived and fragsMissing == 0:
-                # combine all the data
-                fullPacket = "".join(self.__messageBuffers[msgId])
-                del self.__messageBuffers[msgId]
-            else:   
-                self.__messageBuffers[msgId].append([maxIndex, fragsMissing, lastReceived])
+        if connectionData.endpoint == None:
+            errReporter.warning("Data received for %s:%d, but no connection" % (srcAddress, srcPort))
+            return
+        elif connectionData.deferred:         
+            logger.debug("Data received for port %d, but port not ready. Buffering" % dstPort)       
+            # TODO: replace string with parameter
+            d = connectionData.deferred # we're not really connected yet
+            d.addCallback(self.__sendPendingData, dstPort, srcAddress, srcPort, fullPacket)
         else:
-            fullPacket = data
-        if fullPacket:
-            point, dataProtocol = self.__portMappings[dstPort].getConnectionData(srcAddress, srcPort)
-            if point == None:
-                if self.__portMappings[dstPort].isListening():
-                    logger.info("Spawning new connection from %s:%d to port %s" % (srcAddress, srcPort, dstPort))
-                    self.__portMappings[dstPort].spawnNewConnection(srcAddress, srcPort)
-                    point, dataProtocol = self.__portMappings[dstPort].getConnectionData(srcAddress, srcPort)
-                    
-            if point == None:
-                errReporter.warning("Data received for %s:%d, but no connection" % (srcAddress, srcPort))
-                return
-            elif point == "deferred":         
-                logger.debug("Data received for port %d, but port not ready. Buffering" % dstPort)       
-                # TODO: replace string with parameter
-                d = dataProtocol # we're not really connected yet
-                d.addCallback(self.__sendPendingData, dstPort, srcAddress, srcPort, fullPacket)
-            else:
-                logger.debug("Gate service forwarding %d bytes for srcPort %d" % 
-                             (len(fullPacket), srcPort))
-                dataProtocol.transport.write(fullPacket)
+            logger.debug("Unknown Error")
+            
+    def handleData(self, srcAddress, srcPort, dstPort, connectionData, fullPacket):
+            logger.debug("Gate service forwarding %d bytes for srcPort %d" % 
+                         (len(fullPacket), srcPort))
+            connectionData.protocol.transport.write(fullPacket)
             
     def __sendPendingData(self, result, dstPort, srcAddress, srcPort, data):
         if not self.__portMappings[dstPort].isConnectedTo(srcAddress, srcPort):
             return
-        point, dataProtocol = self.__portMappings[dstPort].getConnectionData(srcAddress, srcPort)
-        if point == None or point == "deferred":
+        connectionData = self.__portMappings[dstPort].getConnectionData(srcAddress, srcPort)
+        if not connectionData.endpoint or connectionData.deferred:
             return
         logger.debug("Gate service forwarding %d buffered bytes for srcPort %d" % 
                              (len(data), srcPort))
-        dataProtocol.transport.write(data)
+        connectionData.protocol.transport.write(data)
         
     @classmethod
     def CreateFromConfig(cls, reactor, configKey=None, defaultKey="default"):
@@ -412,3 +359,4 @@ class Service(Factory):
         point = TCP4ClientEndpoint(reactor, g2gConnect.chaperoneAddr, g2gConnect.chaperonePort)
         d = connectProtocol(point, gateService.__chaperoneProtocol)
         d.addCallback(gateService.start, point, g2gConnect.gatePort)
+        

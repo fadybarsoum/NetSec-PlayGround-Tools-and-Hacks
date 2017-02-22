@@ -10,3 +10,12 @@ from PkiPlaygroundAddressPair import PkiPlaygroundAddressPair
 
 DefaultRSASigningAlgo = PKCS1_v1_5
 DefaultRSAEncryptionAlgo = PKCS1OAEP_Cipher
+
+from CertificateDatabase import MutableCertFactory
+try:
+    import CertFactory as CertFactoryImpl
+except:
+    CertFactoryImpl = None
+    
+CertFactory = MutableCertFactory()
+CertFactory.setImplementation(CertFactoryImpl)

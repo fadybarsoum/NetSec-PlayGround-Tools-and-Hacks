@@ -6,7 +6,7 @@ Created on Sep 8, 2016
 
 import logging, random
 
-from twisted.internet.protocol import Protocol
+from twisted.internet.protocol import Protocol, connectionDone
 
 from playground.error import GetErrorReporter
 
@@ -66,6 +66,11 @@ class ChaperoneProtocol(Protocol):
         
         self.__fsm.start(self.STATE_DISCONNECTED)
         
+    def gateAddress(self):
+        return self.__gateAddress
+        
+    def connectionLost(self, reason=connectionDone):
+        self.__demuxer.close()
 
     def connectionMade(self):
         registerGateMessage = RegisterGate()
@@ -124,6 +129,7 @@ class ChaperoneProtocol(Protocol):
     # Connected State Enter Callback
     def __handleConnectedMessages(self, signal, data):
         if signal == Gate2GateMessage:
+            print "bot %d len packet" % len(data.gatePacket)
             self.__demuxer.demux(data.srcAddress, data.srcPort, data.dstPort, data.gatePacket,
                                  (data.ID != MessageDefinition.UNSET and (data.ID, data.index, data.lastPacket) or None))
             

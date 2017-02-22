@@ -10,6 +10,22 @@ from X509Certificate import X509Certificate
 from Crypto.PublicKey import RSA
 configData = GlobalPlaygroundConfigData.getConfig(__name__)
 
+class MutableCertFactory(object):
+    def __init__(self):
+        self.__implementation = None
+
+    def getCertsForAddr(self, addr):
+        return self.__implementation and self.__implementation.getCertsForAddr(addr) or []
+    
+    def getPrivateKeyForAddr(self, addr):
+        return self.__implementation and self.__implementation.getPrivateKeyForAddr(addr) or ""
+    
+    def getRootCert(self):
+        return self.__implementation and self.__implementation.getRootCert() or ""
+
+    def setImplementation(self, implementation):
+        self.__implementation = implementation
+
 class CertificateDatabase(object):
     
     INSTANCE = None

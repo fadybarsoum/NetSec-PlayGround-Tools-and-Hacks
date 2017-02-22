@@ -107,6 +107,17 @@ class StackingFactoryMixin(object):
         return factory
     
     def setHigherFactory(self, f):
+        """This is a Mixin Class. We have no constructor.
+        However, this function must be called if it should behave different
+        in "buildProtocol" so we can alter the function here.
+        
+        We save off buildProtocol to originalBuildProtocol and point
+        both buildProtocol and buildProtocolStack to autoBuildProtocolStack.
+        buildProtocolStack is legacy and should be removed.
+        """
+        self.buildProtocolStack = self.autoBuildProtocolStack
+        self.originalBuildProtocol = self.buildProtocol
+        self.buildProtocol = self.autoBuildProtocolStack
         self.__higherFactory = f
         
     def higherFactory(self):
@@ -114,6 +125,16 @@ class StackingFactoryMixin(object):
     
     def buildProtocolStack(self, addr):
         myProt = self.buildProtocol(addr)
+        if self.higherFactory():
+            if isinstance(self.higherFactory(), StackingFactoryMixin):
+                higherProt = self.higherFactory().buildProtocolStack(addr)
+            else:
+                higherProt = self.higherFactory().buildProtocol(addr)
+            myProt.setHigherProtocol(higherProt)
+        return myProt
+    
+    def autoBuildProtocolStack(self, addr):
+        myProt = self.originalBuildProtocol(addr)
         if self.higherFactory():
             if isinstance(self.higherFactory(), StackingFactoryMixin):
                 higherProt = self.higherFactory().buildProtocolStack(addr)

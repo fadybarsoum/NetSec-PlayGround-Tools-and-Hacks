@@ -5,7 +5,7 @@ Created on Apr 2, 2014
 '''
 
 from playground.network.message.ProtoBuilder import MessageDefinition
-from playground.network.message.StandardMessageSpecifiers import BOOL1, LIST, UINT8, STRING, OPTIONAL
+from playground.network.message.StandardMessageSpecifiers import BOOL1, LIST, UINT8, STRING, OPTIONAL, DEFAULT_VALUE
 
 class OpenSession(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.OpenSession"
@@ -43,7 +43,11 @@ class SessionRunMobileCode(MessageDefinition):
     BODY = [
             ("Cookie",STRING),
             ("MaxRuntime", UINT8),
-            ("RunMobileCodePacket",STRING)]
+            ("ID", UINT8),
+            ("Mechanism", STRING),
+            ("Strict", BOOL1, DEFAULT_VALUE(False)),
+            ("PythonCode", STRING),
+            ("ResultKey", STRING, OPTIONAL)]
     
 class RunMobileCodeAck(MessageDefinition):
     PLAYGROUND_IDENTIFIER="apps.mobilecodeservice.RunMobileCodeAck"

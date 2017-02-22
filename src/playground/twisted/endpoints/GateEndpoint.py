@@ -62,7 +62,7 @@ class GateService(object):
         gateKey = (gateAddr, gatePort)
         if cls.GATES.has_key(gateKey):
             cls.logger.info("Already connected.")
-            cls.__controlConnected("Already Connected", callbackPort, cls.Gates[gateKey][1], 
+            cls.__controlConnected("Already Connected", callbackPort, cls.GATES[gateKey][1], 
                                    callbackProtocolFactory, point, connectD)
             #d = Deferred()
         else:

@@ -6,7 +6,7 @@ Created on Apr 2, 2014
 import playground
 from playground.config import LoadOptions
 from playground.crypto import X509Certificate
-from playground.network.common import Packet, MIBAddressMixin
+from playground.network.common import Packet
 from playground.network.message import definitions
 from playground.network.message import MessageData
 from playground.sandbox.pypy.SandboxCodeRunner import SandboxCodeRunner
@@ -23,11 +23,20 @@ from Crypto.Hash import SHA
 from Crypto.PublicKey import RSA
 from Crypto.Signature import PKCS1_v1_5
 
-from playground.network.client.ClientMessageHandlers import RunMobileCodeHandler, MobileCodeCallbackHandler
-
 from playground.playgroundlog import packetTrace, logging, LoggingContext
 from binhex import binhex
-logger = logging.getLogger(__file__)
+from twisted.internet.protocol import Protocol, Factory
+from playground.network.common.statemachine.StateMachine import StateMachine
+from apps.mobilecodeservice.ServiceMessages import RerequestDecryptionKey,\
+    SessionRunMobileCode, CheckMobileCodeResult, PurchaseDecryptionKey
+from playground.network.common.Protocol import MessageStorage
+from playground.error.ErrorHandler import GetErrorReporter
+from playground.network.common.Timer import callLater
+from apps.mobilecodeservice.MobileCodeHandler import SimpleMobileCodeHandler
+from playground.network.message.ProtoBuilder import MessageDefinition
+
+errReporter = GetErrorReporter(__name__)
+logger = logging.getLogger(__name__)
 
 from apps.bank.BankCore import LedgerLine
 
@@ -103,146 +112,184 @@ class WrapMobileCodeResultTransport(object):
     def loseConnection(self): pass
     def abortConnection(self): pass
 
-class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
+class ServerProtocol(Protocol):
+    
     STATE_UNINIT = "Uninitialized"
+    STATE_RESTORE_STATE = "Restore state in connectionless protocol"
     STATE_OPEN = "Open"
     STATE_FINISHED = "Finished"
-    STATE_PURCHASE = "Purchase decryption key"
+    STATE_PURCHASE = "Purchase decryption key started"
     STATE_REREQUEST = "Rerequest decryption key"
     STATE_RUNNING = "Running code"
     STATE_ERROR = "Error"
-
+    
+    SIGNAL_CODE_EXECUTION_COMPLETE = "Finished Code Execution"
+    
+    SIGNAL_RESTORE_OPEN = "Return to Open State"
+    SIGNAL_RESTORE_RUNNING = "Return to Running State"
+    SIGNAL_RESTORE_PURCHASE = "Return to Purchase State"
+    SIGNAL_RESTORE_FINISHED = "Return to Finished State"
+    SIGNAL_NO_CHARGE = "Billing rate is zero. No charge for computation."
+    
     CODE_TIMEOUT = 1*60*60 # one hour maximum run
     
     #SANDBOX_CONTROLLER = os.path.join(LOCATION_OF_PLAYGROUND, "extras", "sandbox", "IOEnabledSandbox.py")
+
     
-    MIB_PEER_ADDRESS = "PeerAddress"
-    MIB_STATE = "State"
-    MIB_COOKIE = "Cookie"
-    MIB_CODE_STRING = "CodeString"
+    def __init__(self, accountName):
+        
+        # The ServerProtocol state machine can work in a connection oriented
+        # or connectionless fashion. The restore signals return it to the 
+        # saved state
+        
+        self.__fsm = StateMachine()
+        
+        self.__fsm.addState(self.STATE_UNINIT,
+                            (SessionRunMobileCode, self.STATE_RESTORE_STATE),
+                            (CheckMobileCodeResult, self.STATE_RESTORE_STATE),
+                            (PurchaseDecryptionKey, self.STATE_RESTORE_STATE),
+                            (RerequestDecryptionKey, self.STATE_RESTORE_STATE),
+                            
+                            (OpenSession, self.STATE_OPEN))
+        
+        self.__fsm.addState(self.STATE_RESTORE_STATE,
+                            (self.SIGNAL_RESTORE_OPEN, self.STATE_OPEN),
+                            (self.SIGNAL_RESTORE_RUNNING, self.STATE_RUNNING),
+                            (self.SIGNAL_RESTORE_PURCHASE, self.STATE_PURCHASE),
+                            (self.SIGNAL_RESTORE_FINISHED, self.STATE_FINISHED),
+                            onEnter=self.__handleRestoreState)
+        
+        self.__fsm.addState(self.STATE_OPEN, 
+                            (SessionRunMobileCode, self.STATE_RUNNING),
+                            onEnter=self.__handleOpenSession)
+        
+        self.__fsm_addState(self.STATE_RUNNING, 
+                            # TRANSITIONS
+                            (self.SIGNAL_CODE_EXECUTION_COMPLETE, self.STATE_PURCHASE),
+                            (CheckMobileCodeResult, self.STATE_RUNNING),
+                            # Callback
+                            onEnter=self.__handleRunMobileCode)
+        
+        self.__fsm.addState(self.STATE_PURCHASE,
+                            (self.SIGNAL_NO_CHARGE, self.STATE_FINISHED), 
+                            (PurchaseDecryptionKey, self.STATE_FINISHED),
+                            (CheckMobileCodeResult, self.STATE_PURCHASE),
+                            onEnter=self.__mobileCodeComplete)
+        
+        self.__fsm.addState(self.STATE_FINISHED, 
+                            (CheckMobileCodeResult, self.STATE_FINISHED),
+                            (RerequestDecryptionKey, self.STATE_FINISHED),
+                            onEnter=self.__handleFinished)
+        self.__fsm.addState(self.STATE_ERROR, onEnter=self.__handleError)
+        self.__fsm.start(self.STATE_UNINIT, self.STATE_ERROR)
     
-    def __init__(self, factory, addr, accountName):
-        playground.network.common.SimpleMessageHandlingProtocol.__init__(self, factory, addr)
-        self.__factory = factory
+        self.__stateContext = None
         self.__accountName = accountName
         self.__codeString = None
         self.__curState = None
-        
-        self.registerMessageHandler(SessionRunMobileCode, self.__handleRunMobileCode)
-        self.registerMessageHandler(OpenSession, self.__handleOpenSession)
-        self.registerMessageHandler(PurchaseDecryptionKey, self.__handlePurchase)
-        self.registerMessageHandler(RerequestDecryptionKey, self.__handleRerequest)
-        self.registerMessageHandler(CheckMobileCodeResult, self.__handleCheckMobileCodeResult)
-        
-    """def __loadMibs(self):
-        if self.MIBAddressEnabled():
-            self.registerLocalMIB(self.MIB_PEER_ADDRESS, self.__handleMib)
-            self.registerLocalMIB(self.MIB_STATE, self.__handleMib)
-            self.registerLocalMIB(self.MIB_COOKIE, self.__handleMib)
-            self.registerLocalMIB(self.MIB_CODE_STRING, self.__handleMib)
-        
-    def __handleMib(self, mib, args):
-        if mib.endswith(self.MIB_PEER_ADDRESS):
-            if self.transport:
-                return [str(self.transport.getPeer())]
-            return ["<Not Connected>"]
-        elif mib.endswith(self.MIB_STATE):
-            return [self.]
-        elif mib.endswith(self.MIB_COOKIE):
-            return ["%d-%d" % (self.__connData["ClientNonce"], self.__connData["ServerNonce"])]
-        elif mib.endswith(self.MIB_CODE_STRING):
-            if self.__codeString: return [self.__codeString]
-            return ["<Not Set Yet>"]
-        return ""
-        """
-        
-    def writeMsgAndClose(self, msg):
-        self.transport.writeMessage(msg)
-        self.callLater(.1, self.transport.loseConnection)
-        
-    def connectionMade(self):
-        playground.network.common.SimpleMessageHandlingProtocol.connectionMade(self)
-        #self.__loadMibs()
+        self.__storage = MessageStorage()
+    
+    def dataReceived(self, data):
+        self.__storage.update(data)
+        for msg in self.__storage.iterateMessages():
+            self.__fsm.signal(msg.__class__, msg)    
 
-    def __error(self, errMsg, **kargs):
-        logger.error("MobileCodeServer had an error %s" % errMsg)
-        if kargs.has_key("fatal"):
-            fatal = kargs["fatal"]
-            del kargs["fatal"]
+        
+    def close(self):
+        if self.transport: self.transport.loseConnection()
+        self.transport = None
+        
+    def writeMessageAndClose(self, msg):
+        self.transport.write(msg.__serialize__())
+        callLater(0, self.close)
+
+    def __handleError(self, signal, data):
+        errReporter.error("Entered error state on signal %s with data %s" % (signal, data))
+        callLater(0, self.close)
+        
+    def __sendError(self, errorType, msg, **kargs):
+        failure = errorType(ErrorMessage=msg, **kargs)
+        self.writeMessageAndClose(failure)
+        
+    def __handleRestoreState(self, signal, data):
+        # all messages that come to this state should have a Cookie
+        try:
+            restoreKey = data.Cookie
+        except:
+            return self.close()# TODO fix
+        self.__stateContext = self.factory.getSessionState(restoreKey)
+        if not self.__stateContext:
+            return self.close() # TODO Fix
+        
+        logger.info("Restoring State for cookie %s. Next signal %s" % (data.Cookie, self.__stateContext.nextSignal))
+        self.__fsm.signal(self.__stateContext.restoreStateSignal, data)
+        
+    def __handleOpenSession(self, signal, data):
+        if signal == self.SIGNAL_RESTORE_OPEN:
+            self.__fsm.signal(data.__class__, data)
+        
+        elif signal == SessionOpen:
+            openSessionMsg = data
+    
+            if openSessionMsg.Authenticated:
+                return self.__sendError(SessionOpenFailure,
+                                        "Authenticated operation not yet supported",
+                                        ClientNonce=openSessionMsg.ClientNonce)
+    
+            self.__stateContext = self.factory.createSessionContext(openSessionMsg.ClientNonce, 
+                                                                  openSessionMsg.MobileCodeId)
+            self.__stateContext.restoreStateSignal = self.SIGNAL_RESTORE_OPEN
+            if not self.__stateContext:
+                return self.__sendError(SessionOpenFailure, 
+                                        "Unwilling to respond to this request",
+                                        ClientNonce=openSessionMsg.ClientNonce)
+            response = SessionOpen(ClientNonce  =openSessionMsg.clientNonce,
+                                   Cookie       =self.__stateContext.cookie,
+                                   ServiceLevel =self.__stateContext.level,
+                                   BillingRate  =self.__stateContext.billingRate,
+                                   Account      =self.__accountName,
+                                   ServiceExtras=self.__stateContext.extras)
+            self.writeMessageAndClose(response)
+            
         else:
-            fatal = True
-        if not self.__curState or self.__curState.state == self.STATE_ERROR:
-            if self.transport:
-                self.transport.loseConnection()
-            return None
+            return self.close() # TODO Fix
+            
         
-        if self.__curState.state == self.STATE_UNINIT:
-            response = MessageData.GetMessageBuilder(SessionOpenFailure)
-            response["ClientNonce"].setData(kargs.get("ClientNonce",0))
-            self.__curState.state = self.STATE_ERROR
-        else:
-            if self.__curState.state == self.STATE_OPEN:
-                response = MessageData.GetMessageBuilder(RunMobileCodeFailure)
-            elif self.__curState.state == self.STATE_PURCHASE or self.__state == self.STATE_REREQUEST:
-                response = MessageData.GetMessageBuilder(AcquireDecryptionKeyFailure)
-            else:
-                response = MessageData.GetMessageBuilder(GeneralFailure)
-            response["Cookie"].setData(self.__curState.cookie)
-        for karg in kargs.keys():
-            response[karg].setData(kargs[karg])
-        response["ErrorMessage"].setData(errMsg)
-        if fatal: self.__state = self.STATE_ERROR
+    def __handleRunMobileCode(self, signal, data):
+        self.__stateContext.restoreStateSignal = self.SIGNAL_RESTORE_RUNNING
+        if signal == self.SIGNAL_RESTORE_RUNNING:
+            self.__fsm.signal(data.__class__, data)
         
-        packetTrace(logger, response, "Had an error %s" % errMsg)
-        self.writeMsgAndClose(response)
-        return None
-        
-    def __handleOpenSession(self, protocol, msg):
-        msgObj = msg.data()
-        if msgObj.Authenticated:
-            return self.__error("Authenticated operation not yet supported", 
-                                fatal=True, ClientNonce=msgObj.ClientNonce)
-        self.__curState = self.__factory.getNewSessionState(msgObj.ClientNonce, msgObj.MobileCodeId)
-        if not self.__curState:
-            logger.info("Unwilling to serve this mobile code operation (%s). Refused to create state." % msgObj.MobileCodeId) 
-            response = MessageData.GetMessageBuilder(SessionOpenFailure)
-            response["ClientNonce"].setData(msgObj.ClientNonce)
-            response["ErrorMessage"].setData("Unwilling to serve mobile code operation %s" % msgObj.MobileCodeId)
-            self.writeMsgAndClose(response)
-            return
-        self.__curState.state = self.STATE_OPEN
-        response = MessageData.GetMessageBuilder(SessionOpen)
-        response["ClientNonce"].setData(msgObj.ClientNonce)
-        response["Cookie"].setData(self.__curState.cookie)
-        response["ServiceLevel"].setData(self.__curState.level)
-        response["BillingRate"].setData(self.__curState.billingRate)
-        response["Account"].setData(self.__accountName)
-        response["ServiceExtras"].setData(self.__curState.extras)
-        
-        packetTrace(logger, response, "Received opensession message from %s. State is now open" % str(self.transport.getPeer()))
-        self.writeMsgAndClose(response)
-        
-    def __codeHandlerWrapper(self, realHandler, codeUnit):
-        self.__codeString = codeUnit.getCodeString()
-        return realHandler(codeUnit)
-        
-    def __handleRunMobileCode(self, prot, msg):
-        msgObj = msg.data()
-        self.__curState = self.__factory.getSessionState(msgObj.Cookie)
-        if not self.__curState or not self.__curState.state == self.STATE_OPEN:
-            curState = self.__curState and self.__curState.state or "<NO STATE>"
-            return self.__error("Invalid command. Cannot run mobile code unless session open (%s)"%curState, 
-                                fatal=True)
-        
-        logger.info("State found for cookie %s. State=%s" % (msgObj.Cookie, self.__curState.state))
-        if msgObj.MaxRuntime > self.CODE_TIMEOUT:
-            response = MessageData.GetMessageBuilder(RunMobileCodeAck)
-            response["Cookie"].setData(self.__curState.cookie)
-            response["MobileCodeAccepted"].setData(False)
-            response["Message"].setData("Max Run Time parameter is too long.")
-            self.writeMsgAndClose(response)
-        
-        rawRunMobileCodeMsg = msgObj.RunMobileCodePacket
+        elif signal == SessionRunMobileCode:
+            runMobileCodeMsg = data
+            if runMobileCodeMsg.MaxRuntime > self.CODE_TIMEOUT:
+                response = RunMobileCodeAck(Cookie            =self.__stateContext.Cookie,
+                                            MobileCodeAccepted=False,
+                                            Message           ="Max run time parameter is too long.")
+                return self.writeMessageAndClose(response)
+            
+            success, msg = self.factory.execute(runMobileCodeMsg.ID,
+                                                runMobileCodeMsg.Mechanism,
+                                                runMobileCodeMsg.PythonCode,
+                                                (runMobileCodeMsg.SaveKey != MessageDefinition.UNSET and runMobileCodeMsg.SaveKey or None),
+                                                self.__stateContext.cookie)
+            
+            response = RunMobileCodeAck(Cookie             = self.__stateContext.cookie,
+                                        MobileCodeAccepted = success,
+                                        Message            = msg)
+            
+            self.writeMessageAndClose(response)
+        elif signal == CheckMobileCodeResult:
+            if self.__stateContext.encryptedResult != None:
+                self.__fsm.signal(self.SIGNAL_CODE_EXECUTION_COMPLETE, None)
+                return
+            response = RunMobileCodeAck(Cookie=self.__curState.cookie,
+                                        MobileCodeAccepted=True,
+                                        Message="Still running")
+
+            return self.writeMsgAndClose(response)
+                        
+        """rawRunMobileCodeMsg = msgObj.RunMobileCodePacket
         startTime = time.time()
         ctx = CodeExecutionContext()
         ctx.startTime = startTime
@@ -268,7 +315,52 @@ class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
         response = MessageData.GetMessageBuilder(RunMobileCodeAck)
         response["Cookie"].setData(self.__curState.cookie)
         response["MobileCodeAccepted"].setData(True)
-        self.writeMsgAndClose(response)
+        self.writeMsgAndClose(response)"""
+        
+    def __generateEncryptedResultMessage(self):
+        response = EncryptedMobileCodeResult(Cookie=self.__stateContext.cookie,
+                                             RunTime=self.__stateContext.runtime,
+                                             RunMobileCodeHash=self.__stateContext.runMobileCodeHash,
+                                             EncryptedMobileCodeResultPacket=self.__stateContext.encryptedResult)
+        if self.__stateContext.encryptedResult != "":
+            response.Success = True
+        else: response.Success = False
+        return response
+    
+    def __generateDecryptionKeyMessage(self):
+        decryptionKey, decryptionIv = self.__factory.getDecryptionData(data.Cookie)
+        response = ResultDecryptionKey(Cookie=self.__stateContext.cookie,
+                                       key=decryptionKey,
+                                       iv=decryptionIv)
+        return response
+    
+    def __mobileCodeComplete(self, signal, data):
+        self.__stateContext.restoreStateSignal = self.SIGNAL_RESTORE_PURCHASE
+        if signal == self.SIGNAL_RESTORE_RUNNING:
+            self.__fsm.signal(data.__class__, data)
+        elif signal == self.SIGNAL_CODE_EXECUTION_COMPLETE or signal == CheckMobileCodeResult:
+            if self.__stateContext.billingRate == 0:
+                self.__fsm.signal(self.SIGNAL_NO_CHARGE, data)
+                return
+            response = self.__generateEncryptedResultMessage()
+            return self.writeMessageAndClose(response)
+        
+    def __handleFinished(self, signal, data):
+        self.__stateContext.restoreStateSignal = self.SIGNAL_RESTORE_FINISHED
+        if signal == self.SIGNAL_RESTORE_RUNNING:
+            self.__fsm.signal(data.__class__, data)
+        elif signal == PurchaseDecryptionKey or signal == self.SIGNAL_NO_CHARGE:
+            if signal == PurchaseDecryptionKey:
+                pass
+            response = self.__generateDecryptionKeyMessage()
+            self.writeMessageAndClose(response)
+        elif signal == CheckMobileCodeResult:
+            if self.__stateContext.paid >= self.__stateContext.billingRate:
+                response = self.__generateDecryptionKeyMessage()
+            else:
+                response = self.__generateEncryptedResultMessage()
+            self.writeMessageAndClose(response)
+        
         
     def __handleCheckMobileCodeResult(self, prot, msg):
         msgObj = msg.data()
@@ -335,10 +427,10 @@ class ServerProtocol(playground.network.common.SimpleMessageHandlingProtocol):
                                                                     binascii.hexlify(decryptionIv)))
         self.writeMsgAndClose(response)
 
-class ServerStatePod(object):
+class ServerStateContext(object):
     def __init__(self, key):
         self.cookie = key
-        self.state = ServerProtocol.STATE_UNINIT
+        self.restoreStateSignal = None
         self.mobileCodeId = ""
         self.level = "BASIC"
         self.billingRate = 0
@@ -347,9 +439,11 @@ class ServerStatePod(object):
         self.nextTimeout = time.time() + Server.DEFAULT_TIMEOUT_TO_START
         self.aesKey = None
         self.aesIv = None
+        self.runMobilecodeHash = ""
         self.encryptedResult = None
+        self.runtime = 0
 
-class Server(playground.network.client.ClientApplicationServer.ClientApplicationServer):
+class Server(Factory):
     MIB_BILLING_ACCOUNT = "BillingAccount"
     MIB_CODE_IN_PROCESS = "CodeInProcess"
     
@@ -358,7 +452,7 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
     DEFAULT_TIMEOUT_TO_PURCHASE = 30*60 # 30 minutes after code completes to purchase
     DEFAULT_TIMEOUT_FOR_RECEIPT = 2*60*60 # 2 hours after completion to get results
     
-    StatePod = ServerStatePod
+    StatePod = ServerStateContext
     
     def __init__(self, accountName, bankCert, persistentDb):
         self.__accountName = accountName
@@ -379,13 +473,20 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
         rsaKey = RSA.importKey(bankCert.getPublicKeyBlob())
         self.__validater = PKCS1_v1_5.new(rsaKey)
         self.__mobileCodeIds = {}
+        self.__codeHandlers = {"__default__":SimpleMobileCodeHandler()}
         
     def registerMobileCodeService(self, mobileCodeId, rate):
         if rate < 0:
             raise Exception("Rate must be positive")
         self.__mobileCodeIds[mobileCodeId] = ("BASIC", rate, [])
         
-    def getNewSessionState(self, clientNonce, mobileCodeId):
+    def registerMobileCodeHandler(self, mechanism, handler):
+        self.__codeHandlers[mechanism] = handler
+        
+    def execute(self, mobileCodeId, mobileCodeMechanism, code, saveKey, cookie):
+        
+        
+    def createSessionContext(self, clientNonce, mobileCodeId):
         parameters = self.__mobileCodeIds.get(mobileCodeId, None)
         if not parameters:
             return None
@@ -426,22 +527,6 @@ class Server(playground.network.client.ClientApplicationServer.ClientApplication
             logger.info("Closing session %s" % pod.cookie)
             self.closeSession(k)
         #self.__save()
-        
-    def __loadMibs(self):
-        if self.MIBAddressEnabled():
-            self.registerLocalMIB(self.MIB_BILLING_ACCOUNT, self.__handleMib)
-            self.registerLocalMIB(self.MIB_CODE_IN_PROCESS, self.__handleMib)
-        
-    def __handleMib(self, mib, args):
-        if mib.endswith(self.MIB_BILLING_ACCOUNT):
-            return [self.__accountName]
-        elif mib.endswith(self.MIB_CODE_IN_PROCESS):
-            return self.__inprocessCode
-        return []
-        
-    def configureMIBAddress(self, *args, **kargs):
-        MIBAddressMixin.configureMIBAddress(self, *args, **kargs)
-        self.__loadMibs()
         
     def __save(self):
         # incredibly inefficient. Haven't figured out a better solution yet.
