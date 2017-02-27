@@ -2,9 +2,12 @@
 Created on Sep 8, 2016
 
 @author: sethjn
+
+Modified: Feb 25, 2017 by fml
 '''
 
 import logging, random
+from time import ctime
 
 from twisted.internet.protocol import Protocol, connectionDone
 
@@ -15,9 +18,7 @@ from playground.network.common.statemachine import StateMachineError
 from playground.network.common.Packet import Packet, PacketStorage, IterateMessages
 
 from playground.network.message.ProtoBuilder import MessageDefinition
-from playground.network.message.definitions.playground.base import GateRegistered
-from playground.network.message.definitions.playground.base import Gate2GateMessage
-from playground.network.message.definitions.playground.base import RegisterGate
+from playground.network.message.definitions.playground.base import GateRegistered, Gate2GateMessage, RegisterGate, GetPeers
 
 from playground.playgroundlog import packetTrace
 
@@ -132,4 +133,36 @@ class ChaperoneProtocol(Protocol):
             print "bot %d len packet" % len(data.gatePacket)
             self.__demuxer.demux(data.srcAddress, data.srcPort, data.dstPort, data.gatePacket,
                                  (data.ID != MessageDefinition.UNSET and (data.ID, data.index, data.lastPacket) or None))
-            
+
+    def packetStorage(self):
+        return self.__packetStorage
+
+class ListGrabber (ChaperoneProtocol):
+    def __init__(self, gateAddress, demuxer):
+        ChaperoneProtocol.__init__(self, gateAddress, demuxer)
+        self.latesttime = 1488053681.76
+        self.latestpeers = []
+        self.isMain = False
+
+    def connectionMade(self):
+        self.updateList()
+        
+    def updateList (self):
+        registerGateMessage = GetPeers()
+        self.transport.write(Packet.MsgToPacketBytes(registerGateMessage))
+
+    def dataReceived(self, data):
+        self.packetStorage().update(data)
+        for msg in IterateMessages(self.packetStorage(), logger, errReporter):
+            try:
+                if self.isMain:
+                    print("")
+                    print(ctime(msg.time))
+                    print("Addresses [%s]:" % len(msg.peers))
+                    print("\n".join(msg.peers))
+                    print("")
+                self.latesttime = msg.time
+                self.latestpeers = msg.peers
+            except StateMachineError, e:
+                errReporter.error(("State machine error after receiving %s. Error:\n%s") % (msg, e))
+                self.transport.loseConnection()

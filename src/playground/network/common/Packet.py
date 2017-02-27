@@ -203,7 +203,7 @@ class PacketStorage(object):
         
         if resultCode in [Packet.BUFFER_STATUS_INCOMPLETE,
                           Packet.BUFFER_STATUS_NO_HEADER_YET]:
-            logger.debug("Packet not ready. Cutting off %d bad bytes" % prefixOffset)
+            #logger.debug("Packet not ready. Cutting off %d bad bytes" % prefixOffset)
             self.storage = self.storage[prefixOffset:]
             return None
         

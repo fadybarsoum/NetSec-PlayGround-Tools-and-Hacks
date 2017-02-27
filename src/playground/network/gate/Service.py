@@ -60,8 +60,10 @@ App creating listener:
       if no match, but match srcPort
         G2GService sends back success message with all four parameters
     Send data 
+
+Modified: Feb 25, 2017 by fml
 '''
-import logging
+import logging, time
 
 from twisted.internet.endpoints import TCP4ClientEndpoint, TCP4ServerEndpoint, connectProtocol
 from twisted.internet.protocol import Protocol, Factory, connectionDone
@@ -73,7 +75,7 @@ from playground.network.message.definitions.playground.base import Gate2GateMess
 from playground.network.message.definitions.playground.base import Gate2GateResponse
 from playground.network.message.definitions.playground.base import RegisterGate
 
-from ChaperoneProtocol import ChaperoneProtocol
+from ChaperoneProtocol import ChaperoneProtocol, ListGrabber
 from ChaperoneDemuxer import ChaperoneDemuxer, Port
 from ConnectionData import ConnectionData
 from twisted.internet.defer import Deferred
@@ -114,22 +116,16 @@ class ServiceControlProtocol(Protocol):
         
         logger.info("Gate service received G2G Reservation %s %d from %s" % 
                     (g2gMessage.resvType, g2gMessage.resvId, self.transport.getPeer()))
-        g2gResponse = Gate2GateResponse(resvType = g2gMessage.resvType, resvId = g2gMessage.resvId,
-                                        respType = Gate2GateResponse.RESP_TYPE_INITIAL,
-                                        srcAddr = self.factory.gateAddress())
+        g2gResponse = Gate2GateResponse(resvType = g2gMessage.resvType, resvId = g2gMessage.resvId, respType = Gate2GateResponse.RESP_TYPE_INITIAL, srcAddr = self.factory.gateAddress())
         if g2gMessage.resvType == Gate2GateReservation.RESV_TYPE_CONNECT:
-            result, port, msg = self.factory.registerConnection(g2gMessage.resvId,
-                                                                g2gMessage.dstAddr, g2gMessage.dstPort, self,
-                                                                g2gMessage.callbackAddr, g2gMessage.callbackPort)
+            result, port, msg = self.factory.registerConnection(g2gMessage.resvId, g2gMessage.dstAddr, g2gMessage.dstPort, self, g2gMessage.callbackAddr, g2gMessage.callbackPort)
             g2gResponse.dstAddr = g2gMessage.dstAddr
             g2gResponse.dstPort = g2gMessage.dstPort
             g2gResponse.srcPort = port
             g2gResponse.success = result
             g2gResponse.msg = msg
         elif g2gMessage.resvType == Gate2GateReservation.RESV_TYPE_LISTEN:
-            result, msg = self.factory.registerListener(g2gMessage.resvId,
-                                                        g2gMessage.srcPort, self,
-                                                        g2gMessage.callbackAddr, g2gMessage.callbackPort)
+            result, msg = self.factory.registerListener(g2gMessage.resvId, g2gMessage.srcPort, self, g2gMessage.callbackAddr, g2gMessage.callbackPort)
             g2gResponse.srcPort = g2gMessage.srcPort
             g2gResponse.success = result
             g2gResponse.msg = msg
@@ -147,22 +143,13 @@ class ServiceControlProtocol(Protocol):
     def sendNewConnection(self, resvId, dstAddr, dstPort, connPort):
         logger.info("Spawning new connection for listener with resvId %d for %s %d on local TCP port %d" % 
                     (resvId, dstAddr, dstPort, connPort))
-        g2gResponse = Gate2GateResponse(resvType = Gate2GateReservation.RESV_TYPE_LISTEN, resvId=resvId,
-                                        respType = Gate2GateResponse.RESP_TYPE_CALLBACK,
-                                        dstAddr = dstAddr, dstPort = dstPort,
-                                        connPort = connPort,
-                                        success = True,
-                                        msg = "Spawn")
+        g2gResponse = Gate2GateResponse(resvType = Gate2GateReservation.RESV_TYPE_LISTEN, resvId=resvId, respType = Gate2GateResponse.RESP_TYPE_CALLBACK, dstAddr = dstAddr, dstPort = dstPort, connPort = connPort, success = True, msg = "Spawn")
         self.transport.write(g2gResponse.__serialize__())
         
     def completeConnection(self, resvId, connPort):
         logger.info("Completing callback circuit for outbound connect with resvId %d on local TCP port %d" % 
                     (resvId, connPort))
-        g2gResponse = Gate2GateResponse(resvType = Gate2GateReservation.RESV_TYPE_CONNECT, resvId=resvId,
-                                        respType = Gate2GateResponse.RESP_TYPE_CALLBACK,
-                                        connPort = connPort,
-                                        success = True,
-                                        msg = "Connect Complete")
+        g2gResponse = Gate2GateResponse(resvType = Gate2GateReservation.RESV_TYPE_CONNECT, resvId=resvId, respType = Gate2GateResponse.RESP_TYPE_CALLBACK, connPort = connPort, success = True, msg = "Connect Complete")
         self.transport.write(g2gResponse.__serialize__())
 
 class G2GDataProtocol(Protocol):
@@ -189,9 +176,7 @@ class GateDataPort(Port):
         self._connComponents = connComponents
     
     def _createDataProtocol(self, dstAddr, dstPort, closer):
-        return G2GDataProtocol(closer, lambda data: self._connComponents.chaperoneProtocol.send(self._portNum,
-                                                                                         dstAddr, dstPort,
-                                                                                         data))
+        return G2GDataProtocol(closer, lambda data: self._connComponents.chaperoneProtocol.send(self._portNum, dstAddr, dstPort, data))
 
 class IncomingPort(GateDataPort):
     def __init__(self, resvId, num, connComponents):
@@ -283,9 +268,7 @@ class Service(Factory, ChaperoneDemuxer):
         return self.__gateAddr
 
     def registerConnection(self, resvId, dstAddr, dstPort, controller, callbackAddr, callbackPort):
-        components = SingleConnectionComponents(self.__reactor,
-                                                callbackAddr, callbackPort,
-                                                controller, self.__chaperoneProtocol)
+        components = SingleConnectionComponents(self.__reactor, callbackAddr, callbackPort, controller, self.__chaperoneProtocol)
         srcPort = self.getFreeSrcPort()
         port = OutgoingPort(resvId, srcPort, dstAddr, dstPort, components, lambda: self.clearReservation(srcPort))
         self.reservePort(srcPort, port)
@@ -299,9 +282,7 @@ class Service(Factory, ChaperoneDemuxer):
         if self.portInUse(srcPort):
             logger.error("Gate service could not register port %d because it is already in use" % srcPort)
             return False, "Port already in use"
-        components = SingleConnectionComponents(self.__reactor,
-                                                callbackAddr, callbackPort,
-                                                controller, self.__chaperoneProtocol)
+        components = SingleConnectionComponents(self.__reactor, callbackAddr, callbackPort, controller, self.__chaperoneProtocol)
         port = IncomingPort(resvId, srcPort, components)
         self.reservePort(srcPort, port)
         logger.info("Gate Service registering new listener on port %d" % srcPort)
@@ -334,8 +315,7 @@ class Service(Factory, ChaperoneDemuxer):
             logger.debug("Unknown Error")
             
     def handleData(self, srcAddress, srcPort, dstPort, connectionData, fullPacket):
-            logger.debug("Gate service forwarding %d bytes for srcPort %d" % 
-                         (len(fullPacket), srcPort))
+            logger.debug("Gate service forwarding %d bytes for srcPort %d" % (len(fullPacket), srcPort))
             connectionData.protocol.transport.write(fullPacket)
             
     def __sendPendingData(self, result, dstPort, srcAddress, srcPort, data):
@@ -344,8 +324,7 @@ class Service(Factory, ChaperoneDemuxer):
         connectionData = self.__portMappings[dstPort].getConnectionData(srcAddress, srcPort)
         if not connectionData.endpoint or connectionData.deferred:
             return
-        logger.debug("Gate service forwarding %d buffered bytes for srcPort %d" % 
-                             (len(data), srcPort))
+        logger.debug("Gate service forwarding %d buffered bytes for srcPort %d" % (len(data), srcPort))
         connectionData.protocol.transport.write(data)
         
     @classmethod
@@ -354,9 +333,54 @@ class Service(Factory, ChaperoneDemuxer):
         cls.Create(reactor, g2gConnect)
         
     @classmethod
-    def Create(cls, reactor, g2gConnect):
-        gateService = Service(reactor, g2gConnect.playgroundAddr)
+    def Create(cls, reactor, g2gConnect, servclass=None):
+        if not servclass:
+            servclass = cls
+        gateService = servclass(reactor, g2gConnect.playgroundAddr)
         point = TCP4ClientEndpoint(reactor, g2gConnect.chaperoneAddr, g2gConnect.chaperonePort)
         d = connectProtocol(point, gateService.__chaperoneProtocol)
         d.addCallback(gateService.start, point, g2gConnect.gatePort)
         
+class LGService(Service):
+    def __init__(self, reactor, gateAddr):
+        ChaperoneDemuxer.__init__(self)
+        self.__reactor = reactor
+        self.__gateAddr = gateAddr
+        self.__chaperoneProtocol = ListGrabber(gateAddr, self)
+        self.grabber = self.__chaperoneProtocol
+
+    @classmethod
+    def CreateFromConfig(cls, reactor, configKey=None, defaultKey="default"):
+        g2gConnect = ConnectionData.CreateFromConfig(configKey, defaultKey)
+        return cls.Create(reactor, g2gConnect)
+
+    @classmethod
+    def Create(cls, reactor, g2gConnect):
+        gateService = LGService(reactor, g2gConnect.playgroundAddr)
+        point = TCP4ClientEndpoint(reactor, g2gConnect.chaperoneAddr, g2gConnect.chaperonePort)
+        d = connectProtocol(point, gateService.__chaperoneProtocol)
+        d.addCallback(gateService.start, point, g2gConnect.gatePort)
+        return gateService
+        
+class HPService(Service):
+    def __init__(self, reactor, gateAddr):
+        Service.__init__(self, reactor, gateAddr)
+        try:
+            filename = "./hp/"+time.strftime("%Y_%m_%d %H_%M_%S ")+str(gateAddr)+" hp.txt"
+            self.outputfile = open(filename, "a")
+            print "Saving packets to file: ", filename
+        except Exception, e:
+            print "Couldn't open a file: ", e
+    def demux(self, srcAddress, srcPort, dstPort, data, fragInfo=None):
+        try:
+            self.outputfile.write("[&#TS> %s] %s:%s -> %s:%s [&#MD>\n%s\n<&#MD]\n" % (time.time(), srcAddress,srcPort, self.gateAddress(), dstPort, data))
+            self.outputfile.flush()
+        except:
+            print("Couldn't save packet to file")
+        Service.demux(self, srcAddress, srcPort, 9876, data, fragInfo)
+
+    @classmethod
+    def Create(cls, reactor, g2gConnect):
+        Service.Create(reactor, g2gConnect, HPService)
+
+            
