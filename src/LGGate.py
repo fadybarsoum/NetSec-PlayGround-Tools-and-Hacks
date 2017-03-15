@@ -12,8 +12,9 @@ from twisted.internet.task import deferLater
 from twisted.internet import reactor
 import sys
 
-def createLGService(gatekey=None, logger = None, chapAddr = "127.0.0.1"):
-    g2gConnect = ConnectionData(chapAddr,chapPort,8989, "127.0.0.1")
+def createLGService(gatekey=None, logger = None, chapAddr = "127.0.0.1", chapPort = "9090"):
+    print("createLGService() called: %s" % chapAddr)
+    g2gConnect = ConnectionData(chapAddr,chapPort,19090, "1.1.1.1")
     return LGService.Create(reactor, g2gConnect).grabber
 
 if __name__=="__main__":
@@ -33,7 +34,7 @@ if __name__=="__main__":
     playgroundlog.startLogging(logctx)
     playgroundlog.UseStdErrHandler(True)
     TwistedShutdownErrorHandler.HandleRootFatalErrors()
-
-    createLGService(chapAddr, chapPort).isMain = True
+    
+    createLGService(chapAddr = chapAddr, chapPort = chapPort).isMain = True
     deferLater(reactor, .75, reactor.stop)
     reactor.run()
