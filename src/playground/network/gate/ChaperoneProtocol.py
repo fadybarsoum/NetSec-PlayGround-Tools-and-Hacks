@@ -149,7 +149,10 @@ class ListGrabber (ChaperoneProtocol):
         
     def updateList (self):
         registerGateMessage = GetPeers()
-        self.transport.write(Packet.MsgToPacketBytes(registerGateMessage))
+        try:
+            self.transport.write(Packet.MsgToPacketBytes(registerGateMessage))
+        except:
+            print("updateList(): failed to write packet")
 
     def dataReceived(self, data):
         self.packetStorage().update(data)
