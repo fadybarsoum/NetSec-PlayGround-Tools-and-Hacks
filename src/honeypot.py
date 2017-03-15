@@ -106,7 +106,7 @@ if __name__=="__main__":
     playgroundlog.UseStdErrHandler(True)
 
     # start grabber
-    grabber = createLGService()
+    grabber = createLGService(chapAddr = chapAddr, chapPort = chapPort)
 
     # start gate starter
     starter = GateStarter(logctx, chapAddr, chapPort, None)

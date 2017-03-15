@@ -12,11 +12,20 @@ from twisted.internet.task import deferLater
 from twisted.internet import reactor
 import sys
 
-def createLGService(gatekey=None, logger = None):
-    g2gConnect = ConnectionData.CreateFromConfig(gatekey)
-    return LGService.CreateFromConfig(reactor, gatekey).grabber
+def createLGService(gatekey=None, logger = None, chapAddr = "127.0.0.1"):
+    g2gConnect = ConnectionData(chapAddr,chapPort,8989, "127.0.0.1")
+    return LGService.Create(reactor, g2gConnect).grabber
 
 if __name__=="__main__":
+    args= sys.argv[1:]
+    if len(args) > 0:
+        chapAddr = args[0]
+    else:
+        chapAddr = "127.0.0.1"
+    if len(args) > 1:
+        chapPort = args[1]
+    else:
+        chapPort = "9090"
     # Do logging things
     logctx = playgroundlog.LoggingContext("GATE_MAIN")
     # Uncomment the next line to turn on "packet tracing"
@@ -25,6 +34,6 @@ if __name__=="__main__":
     playgroundlog.UseStdErrHandler(True)
     TwistedShutdownErrorHandler.HandleRootFatalErrors()
 
-    createLGService().isMain = True
+    createLGService(chapAddr, chapPort).isMain = True
     deferLater(reactor, .75, reactor.stop)
     reactor.run()
