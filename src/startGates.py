@@ -52,7 +52,7 @@ class GateStarter(LineReceiver):
     def createGates(self, addrlist):
         newCount = 0
         for addr in addrlist:
-            if self.createGate(addr):
+            if ".4918.73139." not in addr and self.createGate(addr):
                 newCount+=1
         return newCount
 

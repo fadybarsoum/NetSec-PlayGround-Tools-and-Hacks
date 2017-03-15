@@ -86,12 +86,14 @@ if __name__=="__main__":
     chapPort = gstarArgs.get("--cP", "9090")
 
     gateKey = None # generated on the fly for each gate
-    stack = "passthru"
+    stack = None #"passthru"
     # playground port number - make sure this matches the one in playground.network.gate.Service.HPService.dmux(...)
     portNum = 9876
     if stack:
         exec("import " + stack)
         networkStack = eval(stack)
+    else:
+        networkStack = None
     
     # Do logging things
     logger = logging.getLogger(__name__)
