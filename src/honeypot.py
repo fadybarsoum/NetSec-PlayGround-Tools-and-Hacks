@@ -61,7 +61,7 @@ def maintainGates(hpFactory,port,stack,logerror,grabber,starter):
         if g2gconn:
             callLater(.25, connectEndpointToGate, port, g2gconn,stack,hpFactory,logerror)
     grabber.updateList()
-    callLater(1, maintainGates, hpFactory, port, networkStack,logerror, grabber,starter)
+    callLater(.75, maintainGates, hpFactory, port, networkStack,logerror, grabber,starter)
 
 def connectEndpointToGate(port,g2gconn, stack, hpFactory, logerror):
     hpServerEndpoint = GateServerEndpoint(reactor, port, "127.0.0.1", g2gconn.gatePort, stack)
@@ -84,6 +84,7 @@ if __name__=="__main__":
     # Get the args you need
     chapAddr = gstarArgs.get("--cA", "127.0.0.1")
     chapPort = gstarArgs.get("--cP", "9090")
+    addrFile = gstarArgs.get("--addrFile", None)
 
     gateKey = None # generated on the fly for each gate
     stack = None #"passthru"
@@ -109,7 +110,7 @@ if __name__=="__main__":
     grabber = createLGService(chapAddr = chapAddr, chapPort = chapPort)
 
     # start gate starter
-    starter = GateStarter(logctx, chapAddr, chapPort, None)
+    starter = GateStarter(logctx, chapAddr, chapPort, addrFile)
 
     # This guy will be the server. Create an instance of the factory
     hpProtocolServerFactory = HoneypotServerFactory()

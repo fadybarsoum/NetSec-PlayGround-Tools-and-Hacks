@@ -52,8 +52,13 @@ class GateStarter(LineReceiver):
     def createGates(self, addrlist):
         newCount = 0
         for addr in addrlist:
-            if ".4918.73139." not in addr and self.createGate(addr):
-                newCount+=1
+            if ".66432.13056." not in addr:
+                if self.createGate(addr):
+                    newCount+=1
+                else:
+                    print("sG.createGates(%s) not true" % addr)
+            else:
+                print("sG.createGates(%s) found whitelisted address. Ignoring." % addr)
         return newCount
 
     # Not yet called nor tested
