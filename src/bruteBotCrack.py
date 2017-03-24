@@ -2,7 +2,7 @@ from bot.common.network import ReprogrammingRequest
 import md5
 
 def crackRequestPW(msg):
-   realChecksum = req.Checksum
+    realChecksum = req.Checksum
 
     for i in range(999999):
         pw = "0"*(6-len(str(i))) + str(i)
