@@ -9,7 +9,7 @@ def crackRequestPW(msg):
     realChecksum = msg.Checksum
 
     for i in range(999999):
-        pw = checkPw(msg,i, realChecksum):
+        pw = checkPw(msg,i, realChecksum)
         if pw:
             return pw
 
@@ -18,11 +18,14 @@ def checkPw(msg, pwnum, realCS):
     msg.Checksum = pw
     testChecksum = md5.new(msg.__serialize__()).hexdigest()
     if testChecksum == realCS:
-        return rw
+        return pw
+
+def lambdaCheck (msg,realCS):
+    return lambda pwnum: checkPw(msg,pwnum,realCS)
 
 def parCrack(msg):
     num_cores = multiprocessing.cpu_count()
-    results = Parallel(n_jobs=num_cores)(delayed(checkPw)(msg)(i)(msg.Checksum) for i in range(999999))
+    results = Parallel(n_jobs=num_cores)(delayed(lambdaCheck(msg,msg.Checksum))(i) for i in range(999999))
     return results
 
 if __name__ == "__main__":
@@ -30,6 +33,6 @@ if __name__ == "__main__":
 
     req, bytesUsed = ReprogrammingRequest.Deserialize(s)
 
-    print(crackRequestPW(req))
+    print(parCrack(req))
 
 
