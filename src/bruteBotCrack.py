@@ -5,11 +5,11 @@ def crackRequestPW(msg):
    realChecksum = req.Checksum
 
     for i in range(999999):
-	    pw = "0"*(6-len(str(i))) + str(i)
-	    req.Checksum = pw
-	    testChecksum = md5.new(req.__serialize__()).hexdigest()
-	    if testChecksum == realChecksum:
-		    return rw
+        pw = "0"*(6-len(str(i))) + str(i)
+        req.Checksum = pw
+        testChecksum = md5.new(req.__serialize__()).hexdigest()
+        if testChecksum == realChecksum:
+            return rw
 
 
 if __name__ == "__main__":
