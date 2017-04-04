@@ -77,7 +77,7 @@ class ReprogrammingClientProtocol(Protocol):
                                    Data      =[])
         InsertChecksum(req, password=password)
         print("")
-        print(req.__serialize__())
+        print(repr(req.__serialize__()))
         print(req.Checksum)
         print("")
         self.__requests[req.RequestId] = Deferred()
