@@ -79,18 +79,18 @@ def pwFlood (protocol, counter):
         print("Done with flood!")
         loop.stop()
 
-def startflood(loop):
-    loop.start(0.010)
+def startflood(loop, ldelay = 0.010):
+    loop.start(ldelay)
 
-def crack(address = "2017.1.1.1"):
+def crack(address = "2017.1.1.1", ldelay = 0.010):
     counter = [0, 0]
     proto = ReprogrammingClientProtocol()
     endpt = GateClientEndpoint(reactor, address, 666, PlaygroundNetworkSettings())
     d =  connectProtocol(endpt,proto)
     loop = task.LoopingCall(pwFlood, proto, counter)
-    reactor.callLater(3, startflood, loop)
+    reactor.callLater(3, startflood, loop, ldelay)
     reactor.run()
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    crack(args[0] or None)
+    crack(args[0] or None, args[1] or None)
