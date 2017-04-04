@@ -93,4 +93,4 @@ def crack(address = "2017.1.1.1", ldelay = 0.010):
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    crack(args[0] or None, int(args[1]) or None)
+    crack(args[0] or None, float(args[1]) or None)
