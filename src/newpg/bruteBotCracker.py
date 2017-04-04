@@ -76,7 +76,7 @@ def pwFlood (protocol, counter):
         if i%10000 == 0:
             print("Done with %s (# responses: %s)" % (i/10000,protocol.responses))
     else:
-        print("Done with flood!")
+        print("Done with flood! (%s)" % protocol.responses)
         loop.stop()
 
 def startflood(loop, ldelay = 0.010):
