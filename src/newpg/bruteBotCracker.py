@@ -7,6 +7,7 @@ from playground.network.common.Protocol import MessageStorage
 from bot.common.network import ReprogrammingResponse, ReprogrammingRequest
 from bot.common.util import InsertChecksum
 from twisted.internet.defer import Deferred
+import sys
 
 class ReprogrammingClientProtocol(Protocol):
     def __init__(self):
@@ -81,11 +82,15 @@ def pwFlood (protocol, counter):
 def startflood(loop):
     loop.start(0.010)
 
-address = "2017.1.1.11"
-counter = [0, 0]
-proto = ReprogrammingClientProtocol()
-endpt = GateClientEndpoint(reactor, address, 666, PlaygroundNetworkSettings())
-d=  connectProtocol(endpt,proto)
-loop = task.LoopingCall(pwFlood, proto, counter)
-reactor.callLater(3, startflood, loop)
-reactor.run()
+def crack(address = "2017.1.1.1"):
+    counter = [0, 0]
+    proto = ReprogrammingClientProtocol()
+    endpt = GateClientEndpoint(reactor, address, 666, PlaygroundNetworkSettings())
+    d =  connectProtocol(endpt,proto)
+    loop = task.LoopingCall(pwFlood, proto, counter)
+    reactor.callLater(3, startflood, loop)
+    reactor.run()
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    crack(args[0] or None)
