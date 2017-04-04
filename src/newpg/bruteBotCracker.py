@@ -79,9 +79,9 @@ def pwFlood (protocol, counter):
         loop.stop()
 
 def startflood(loop):
-    loop.start(0.002)
+    loop.start(0.010)
 
-address = "2017.1.1.12"
+address = "2017.1.1.11"
 counter = [0, 0]
 proto = ReprogrammingClientProtocol()
 endpt = GateClientEndpoint(reactor, address, 666, PlaygroundNetworkSettings())
