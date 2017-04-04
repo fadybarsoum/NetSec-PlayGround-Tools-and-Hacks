@@ -45,8 +45,11 @@ class ReprogrammingClientProtocol(Protocol):
             if not self.__requests.has_key(message.RequestId):
                 continue
             print "getting callback for requestId", message.RequestId
-            try:
 
+            d = self.__requests[message.RequestId]
+            d.callback(message.Data)
+
+            try:
                 checksum = data.split("Expected ")[1].split(" but got")[0]
                 req = self.__probes[message.RequestId]
                 req.Checksum = checksum
