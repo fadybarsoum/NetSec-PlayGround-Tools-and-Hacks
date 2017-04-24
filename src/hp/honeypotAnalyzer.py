@@ -359,12 +359,15 @@ def main(checkValid = False, steal = False, hpDirectory = "."):
 
     pwRepMS = []
     psRepMS = []
+    cfRepMS = []
     for ms in MsgStore.MESSAGES["cyberward.botinterface.ReprogrammingRequest"]:
         if ms.msg.Opcode == 0: # this is a SET request
             if (4 in ms.msg.Subsystems):
                 pwRepMS.append(ms)
             if (1 in ms.msg.Subsystems):
                 psRepMS.append(ms)
+            if (0 in ms.msg.Subsystems):
+                cfRepMS.append(ms)
 
     print ("\nNum reprogram PASSWORD msgs found: %s" % len(pwRepMS))
     for ms in pwRepMS:
@@ -382,6 +385,10 @@ def main(checkValid = False, steal = False, hpDirectory = "."):
 
     print ("\nNum reprogram PROTOCOL_STACK msgs found: %s" % len(psRepMS))
     for ms in psRepMS:
-        print("   [%s] %s:\t%s" % (ctime(ms.timestamp), ms.toAddr, len(ms.msg.Data[0])))
+        print("   [%s / %s] %s:\t%s" % (ctime(ms.timestamp), ms.timestamp, ms.toAddr, len(ms.msg.Data[0])))
+
+    print ("\nNum reprogram CERT_FACTORY msgs found: %s" % len(cfRepMS))
+    for ms in cfRepMS:
+        print("   [%s / %s] %s:\t%s" % (ctime(ms.timestamp), ms.timestamp, ms.toAddr, len(ms.msg.Data[0])))
 if __name__ == "__main__":
     main()
